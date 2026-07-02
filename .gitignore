@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# Local tooling
+.claude/
+
+# Third-party software (MC PlotXY) — not part of this project
+PlotXY.exe
+Documentation/
+README FIRST.pdf
+gmon.out
