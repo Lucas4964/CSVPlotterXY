@@ -5,12 +5,37 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QHeaderView, QLabel, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 _KEY_ROLE = Qt.ItemDataRole.UserRole
+_COLOR_ROLE = Qt.ItemDataRole.UserRole + 1
+_SWATCH_SIZE = 12
+_SWATCH_COLUMN_WIDTH = 28
+
+
+class _SwatchDelegate(QStyledItemDelegate):
+    """Paints a small filled square centered in the cell, instead of the
+    default left-anchored icon rendering used by DecorationRole."""
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        color = index.data(_COLOR_ROLE)
+        if color is None:
+            super().paint(painter, option, index)
+            return
+        rect = option.rect
+        x = rect.x() + (rect.width() - _SWATCH_SIZE) // 2
+        y = rect.y() + (rect.height() - _SWATCH_SIZE) // 2
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        qcolor = QColor(color)
+        painter.setBrush(qcolor)
+        painter.setPen(qcolor.darker(150))
+        painter.drawRoundedRect(x, y, _SWATCH_SIZE, _SWATCH_SIZE, 2, 2)
+        painter.restore()
 
 
 class ReadoutPanel(QWidget):
@@ -40,8 +65,10 @@ class ReadoutPanel(QWidget):
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.setAlternatingRowColors(True)
+        self._table.setItemDelegateForColumn(0, _SwatchDelegate(self._table))
         header = self._table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(0, _SWATCH_COLUMN_WIDTH)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._table.cellClicked.connect(self._on_cell_clicked)
@@ -64,10 +91,8 @@ class ReadoutPanel(QWidget):
 
         self._table.setRowCount(len(rows))
         for r, (key, name, color, y) in enumerate(rows):
-            swatch = QPixmap(12, 12)
-            swatch.fill(QColor(color))
             color_item = QTableWidgetItem()
-            color_item.setData(Qt.ItemDataRole.DecorationRole, swatch)
+            color_item.setData(_COLOR_ROLE, color)
             color_item.setData(_KEY_ROLE, key)
             color_item.setToolTip("Clique para mudar a cor da série")
             name_item = QTableWidgetItem(name)
