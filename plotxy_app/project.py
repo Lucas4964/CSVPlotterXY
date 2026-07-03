@@ -14,7 +14,7 @@ import numpy as np
 from . import expressions
 from .data_model import DataSet
 
-INDEX_NAME = "índice"
+INDEX_NAME = "index"
 
 
 class ProjectError(Exception):

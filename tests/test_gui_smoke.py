@@ -82,8 +82,8 @@ def test_two_files_tree_and_labels(win, app):
     labels = [win._panel._x_combo.itemText(i)
               for i in range(win._panel._x_combo.count())]
     assert "time (a.csv)" in labels and "time (b.csv)" in labels
-    # default selection survived the second file load: X=time(a), P1 checked
-    assert win._panel.x_ref() == SeriesRef("column", f1, "time")
+    # default selection survived the second file load: X=index(a), P1 checked
+    assert win._panel.x_ref() == SeriesRef("index", f1, INDEX_NAME)
     assert win._panel.y_refs() == [SeriesRef("column", f1, "P1")]
     assert len(win._plot._curves) == 1
 
@@ -117,7 +117,9 @@ def test_custom_series_flow(win, app):
     win._panel.check_ref(ref)
     app.processEvents()
     assert any(k == ref.key() for k in win._plot._curves)
-    # custom series values correct at cursor
+    # custom series values correct at cursor (X = time for interpolation)
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    app.processEvents()
     win._plot._cursor.setValue(0.45)
     app.processEvents()
     # columns: [swatch | Série | Valor]
@@ -212,6 +214,9 @@ def test_remove_all_files_clears_plot(win, app):
 
 
 def test_axis_range_set_and_sync(win, app):
+    # use a fine-grained X (time) so a 0.3-wide window is allowed
+    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    app.processEvents()
     win._plot.set_x_range(0.2, 0.5)
     win._plot.set_y_range(0.0, 9.0)
     app.processEvents()
@@ -224,6 +229,8 @@ def test_axis_range_set_and_sync(win, app):
 
 
 def test_axis_panel_apply_and_invalid(win, app):
+    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    app.processEvents()
     win._axis._fields["xmin"].setText("0.1")
     win._axis._fields["xmax"].setText("0.7")
     win._axis._fields["ymin"].setText("0")
@@ -243,7 +250,10 @@ def test_axis_panel_apply_and_invalid(win, app):
 
 
 def test_zoom_out_limit_keeps_curve(win, app):
-    # request an absurd zoom-out; setLimits must clamp it (data span ~0.9)
+    # X = time (span ~0.9) so maxXRange ~= 18
+    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    app.processEvents()
+    # request an absurd zoom-out; setLimits must clamp it
     win._plot.set_x_range(-1e6, 1e6)
     app.processEvents()
     x0, x1, _, _ = win._plot.view_ranges()
@@ -311,6 +321,8 @@ def test_readout_swatch_click_requests_color(app):
 
 
 def test_axis_popup_wiring(win, app):
+    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    app.processEvents()
     # AxisPanel is a standalone Popup window, not embedded in the splitter
     assert win._axis.parent() is None
     assert win._axis.windowFlags() & Qt.WindowType.Popup
@@ -331,6 +343,8 @@ def test_axis_popup_wiring(win, app):
 
 def test_click_tooltip(win, app):
     win.resize(1200, 700)
+    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    app.processEvents()
     win._plot.set_x_range(0.0, 0.9)
     win._plot.set_y_range(0.0, 9.0)
     app.processEvents()

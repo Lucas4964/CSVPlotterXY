@@ -31,7 +31,7 @@ def test_label_qualification(proj):
     assert proj.label(SeriesRef("column", f1, "time")) == "time (a.csv)"
     assert proj.label(SeriesRef("column", f2, "time")) == "time (b.csv)"
     assert proj.label(SeriesRef("column", f2, "w")) == "w"  # still unique
-    # índice qualifies with >= 2 files
+    # index qualifies with >= 2 files
     assert "(a.csv)" in proj.label(SeriesRef("index", f1, INDEX_NAME))
 
 

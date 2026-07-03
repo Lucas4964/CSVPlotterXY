@@ -127,10 +127,12 @@ class MainWindow(QMainWindow):
                 + (f" (+{more})" if more > 0 else ""), 6000)
 
         if first_file:
-            # v1 default: X = first column, second column pre-checked
-            x_fallback = SeriesRef("column", file_id, dataset.names[0])
-            initial_y = (SeriesRef("column", file_id, dataset.names[1])
-                         if dataset.n_cols > 1 else None)
+            # default: X = row index; pre-check a data column as Y (the
+            # second column when present, to avoid the trivial ramp when
+            # the first column is a time/index-like axis)
+            x_fallback = SeriesRef("index", file_id, INDEX_NAME)
+            col = dataset.names[1] if dataset.n_cols > 1 else dataset.names[0]
+            initial_y = SeriesRef("column", file_id, col)
             self._refresh_panel(x_fallback=x_fallback, pre_check=initial_y)
         else:
             self._refresh_panel()
@@ -144,7 +146,7 @@ class MainWindow(QMainWindow):
             base = os.path.basename(ds.source_path)
             series = [PanelSeries(ref=SeriesRef("index", file_id, INDEX_NAME),
                                   plain_name=INDEX_NAME, is_index=True,
-                                  tooltip="Índice das linhas (0, 1, 2, …)")]
+                                  tooltip="index — número da linha (0, 1, 2, …)")]
             series += [PanelSeries(ref=SeriesRef("column", file_id, n),
                                    plain_name=n) for n in ds.names]
             groups.append(PanelGroup(file_id=file_id, title=base,
