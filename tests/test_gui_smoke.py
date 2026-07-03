@@ -120,8 +120,9 @@ def test_custom_series_flow(win, app):
     # custom series values correct at cursor
     win._plot._cursor.setValue(0.45)
     app.processEvents()
-    rows = {win._readout._table.item(r, 0).text():
-            win._readout._table.item(r, 1).text()
+    # columns: [swatch | Série | Valor]
+    rows = {win._readout._table.item(r, 1).text():
+            win._readout._table.item(r, 2).text()
             for r in range(win._readout._table.rowCount())}
     t = np.arange(10) * 0.1
     expected = float(np.interp(0.45, t, np.arange(10) * 3.0))
@@ -284,6 +285,29 @@ def test_set_curve_color_persists_across_theme(win, app):
     item.setCheckState(Qt.CheckState.Checked)
     app.processEvents()
     assert win._plot._curves[key].opts["pen"].color().name() == "#ff0000"
+
+
+def test_readout_swatch_click_requests_color(app):
+    # standalone panel so the click doesn't trigger the real (modal)
+    # color dialog wired up in MainWindow
+    from plotxy_app.readout_panel import ReadoutPanel, _KEY_ROLE
+    panel = ReadoutPanel()
+    panel.show()
+    app.processEvents()
+    rows = [("column|f1|P1", "P1", "#ff0000", 1.5),
+            ("column|f1|P2", "P2", "#00ff00", 2.5)]
+    panel.update_values(0.3, rows, False)
+    app.processEvents()
+    assert panel._table.rowCount() == 2
+    assert panel._table.item(0, 0).data(_KEY_ROLE) == "column|f1|P1"
+    captured = []
+    panel.color_change_requested.connect(captured.append)
+    panel._on_cell_clicked(1, 0)          # swatch column of P2
+    assert captured == ["column|f1|P2"]
+    captured.clear()
+    panel._on_cell_clicked(0, 1)          # name column -> ignored
+    assert captured == []
+    panel.hide()
 
 
 def test_axis_popup_wiring(win, app):

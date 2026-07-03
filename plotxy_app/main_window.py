@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
         self._panel.edit_series_requested.connect(self._on_edit_series)
         self._panel.delete_series_requested.connect(self._on_delete_series)
         self._plot.cursor_moved.connect(self._readout.update_values)
+        self._readout.color_change_requested.connect(self._plot.prompt_color)
         self._axis.range_changed.connect(self._on_axis_range_changed)
         self._axis.auto_requested.connect(lambda: self._plot.autorange())
         self._plot.view_range_changed.connect(self._axis.set_ranges)
