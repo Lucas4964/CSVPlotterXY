@@ -199,6 +199,28 @@ def test_theme_toggle_with_everything_active(win, app):
     assert len(win._plot._zoom_curves) == n_curves
 
 
+def test_legend_label_color_follows_theme(win, app):
+    # the legend text must re-render with the theme's color when the theme
+    # is toggled with a series already loaded (setLabelTextColor alone only
+    # updates the option, not the rendered HTML)
+    from plotxy_app.themes import DARK, LIGHT
+
+    def legend_html():
+        _s, label = win._plot._legend.items[0]
+        return label.item.toHtml().lower()
+
+    win._theme = LIGHT
+    win._apply_theme()
+    app.processEvents()
+    assert LIGHT.text.lower() in legend_html()
+
+    win._theme = DARK
+    win._apply_theme()
+    app.processEvents()
+    assert DARK.text.lower() in legend_html()
+    assert LIGHT.text.lower() not in legend_html()
+
+
 def test_remove_all_files_clears_plot(win, app):
     for fid in file_ids(win):
         win._project.remove_file(fid)

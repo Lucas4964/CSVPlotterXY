@@ -279,6 +279,11 @@ class PlotArea(QWidget):
                 ax.setTextPen(pg.mkPen(theme.axis_color))
             item.showGrid(x=True, y=True, alpha=theme.grid_alpha)
         self._legend.setLabelTextColor(theme.text)
+        # setLabelTextColor only updates the label's color option; the HTML
+        # is re-rendered (picking up the new color) only on setText, so
+        # force a re-render for the already-existing legend entries.
+        for _sample, label in self._legend.items:
+            label.setText(label.text)
         self._cursor.setPen(pg.mkPen(theme.cursor_color, width=2))
         self._cursor.setHoverPen(pg.mkPen(theme.cursor_color, width=4))
 
