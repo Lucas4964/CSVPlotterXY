@@ -36,7 +36,7 @@ class SeriesDialog(QDialog):
         self._expr_edit.setPlaceholderText("ex.: P1 + P2 + P3")
         layout.addWidget(self._expr_edit)
 
-        hint = QLabel("Operações: +  −  *  /  **  abs()  parênteses.\n"
+        hint = QLabel("Operações: +  −  *  /  **  abs()  sqrt()  parênteses.\n"
                       "Duplo clique numa série abaixo insere o nome na "
                       "expressão (aspas automáticas quando necessário).")
         hint.setWordWrap(True)

@@ -5,15 +5,42 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from pyqtgraph.graphicsItems.LegendItem import ItemSample
+from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QColorDialog, QSplitter, QVBoxLayout, QWidget
 
 from .themes import Theme
 
 pg.setConfigOptions(antialias=True)
 
 _INCREASING, _DECREASING, _NON_MONOTONIC = 0, 1, 2
+
+
+class ClickableSample(ItemSample):
+    """Legend sample drawn as a solid color square; clicking it invokes a
+    callback (opens a color picker) instead of toggling visibility."""
+
+    def __init__(self, item, key: str, on_click):
+        super().__init__(item)
+        self._key = key
+        self._on_click = on_click
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(0, 0, 20, 20)
+
+    def paint(self, p, *args) -> None:
+        pen = self.item.opts.get("pen")
+        color = pg.mkColor(pen.color() if hasattr(pen, "color")
+                           else (pen or "#888888"))
+        p.setBrush(pg.mkBrush(color))
+        p.setPen(pg.mkPen(color.darker(150)))
+        p.drawRect(QRectF(3, 3, 14, 14))
+
+    def mouseClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+            self._on_click(self._key)
 
 
 class PlotArea(QWidget):
@@ -38,6 +65,8 @@ class PlotArea(QWidget):
         self._curves: dict[str, pg.PlotDataItem] = {}
         self._zoom_curves: dict[str, pg.PlotDataItem] = {}
         self._color_of: dict[str, str] = {}
+        self._color_override: dict[str, str] = {}  # user-picked colors, per key
+        self._legend_samples: dict[str, ClickableSample] = {}
         self._theme: Theme | None = None
         self._marker_x = 0.0
         self._syncing = False  # guard: region <-> zoom-panel feedback loop
@@ -129,13 +158,17 @@ class PlotArea(QWidget):
                     self._zoom_curves[key].setData(x, y, connect="finite")
                     continue
             self._labels[key] = label
-            color = palette[len(self._color_of) % len(palette)]
+            color = (self._color_override.get(key)
+                     or palette[len(self._color_of) % len(palette)])
             self._color_of[key] = color
             pen = pg.mkPen(color, width=2)
-            curve = self._pw.plot(x, y, pen=pen, name=label, connect="finite")
+            curve = self._pw.plot(x, y, pen=pen, connect="finite")
             curve.setClipToView(True)
             curve.setDownsampling(auto=True, method="peak")
             self._curves[key] = curve
+            sample = ClickableSample(curve, key, self._prompt_color)
+            self._legend.addItem(sample, label)
+            self._legend_samples[key] = sample
             zcurve = self._zoom_pw.plot(x, y, pen=pen, connect="finite")
             zcurve.setDownsampling(auto=True, method="peak")
             self._zoom_curves[key] = zcurve
@@ -259,11 +292,14 @@ class PlotArea(QWidget):
             line.setPen(pg.mkPen(theme.accent, width=1))
 
         for i, key in enumerate(self._curves):
-            color = theme.curve_palette[i % len(theme.curve_palette)]
+            color = (self._color_override.get(key)
+                     or theme.curve_palette[i % len(theme.curve_palette)])
             self._color_of[key] = color
             pen = pg.mkPen(color, width=2)
             self._curves[key].setPen(pen)
             self._zoom_curves[key].setPen(pen)
+            if key in self._legend_samples:
+                self._legend_samples[key].update()
         if self._click_label.isVisible():
             self._apply_tooltip_theme()
         self._on_cursor_moved()
@@ -275,11 +311,33 @@ class PlotArea(QWidget):
         if curve is not None:
             self._legend.removeItem(curve)
             self._pw.removeItem(curve)
+        self._legend_samples.pop(key, None)
         zcurve = self._zoom_curves.pop(key, None)
         if zcurve is not None:
             self._zoom_pw.removeItem(zcurve)
         self._color_of.pop(key, None)
         self._labels.pop(key, None)
+        # note: _color_override is intentionally kept so a re-checked
+        # series keeps its user-picked color
+
+    def _prompt_color(self, key: str) -> None:
+        initial = QColor(self._color_of.get(key, "#888888"))
+        color = QColorDialog.getColor(initial, self, "Cor da série")
+        if color.isValid():
+            self.set_curve_color(key, color.name())
+
+    def set_curve_color(self, key: str, hexcolor: str) -> None:
+        self._color_override[key] = hexcolor
+        self._color_of[key] = hexcolor
+        pen = pg.mkPen(hexcolor, width=2)
+        if key in self._curves:
+            self._curves[key].setPen(pen)
+        if key in self._zoom_curves:
+            self._zoom_curves[key].setPen(pen)
+        sample = self._legend_samples.get(key)
+        if sample is not None:
+            sample.update()
+        self._on_cursor_moved()
 
     def _set_x(self, x_key: str, x_label: str, x: np.ndarray) -> None:
         self._x_key = x_key

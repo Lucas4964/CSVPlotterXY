@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox,
-    QPushButton, QSplitter, QToolBar, QVBoxLayout, QWidget,
+    QPushButton, QSplitter, QToolBar,
 )
 
 from . import __version__
@@ -58,6 +58,10 @@ class MainWindow(QMainWindow):
         goto_btn.clicked.connect(self._on_goto_x)
         toolbar.addWidget(goto_btn)
 
+        self._scale_btn = QPushButton("Escala…")
+        self._scale_btn.clicked.connect(self._open_axis_popup)
+        toolbar.addWidget(self._scale_btn)
+
         self._theme_btn = QPushButton()
         self._theme_btn.clicked.connect(self._toggle_theme)
         toolbar.addWidget(self._theme_btn)
@@ -69,25 +73,21 @@ class MainWindow(QMainWindow):
         self._panel = SeriesPanel()
         self._plot = PlotArea()
         self._readout = ReadoutPanel()
-        self._axis = AxisPanel()
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-        right_layout.addWidget(self._readout, stretch=1)
-        right_layout.addWidget(self._axis)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._panel)
         splitter.addWidget(self._plot)
-        splitter.addWidget(right)
+        splitter.addWidget(self._readout)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([280, 760, 240])
+        splitter.setSizes([280, 760, 230])
         splitter.setCollapsible(1, False)
         self.setCentralWidget(splitter)
+
+        # axis-scale controls live in a dropdown popup (opened from toolbar)
+        self._axis = AxisPanel()
+        self._axis.setWindowFlags(Qt.WindowType.Popup)
 
         # --- status bar
         self._status_info = QLabel("")
@@ -261,6 +261,14 @@ class MainWindow(QMainWindow):
 
     def _plot_zoom_toggled(self, checked: bool) -> None:
         self._plot.set_zoom_visible(checked)
+
+    def _open_axis_popup(self) -> None:
+        x0, x1, y0, y1 = self._plot.view_ranges()
+        self._axis.set_ranges(x0, x1, y0, y1)
+        pos = self._scale_btn.mapToGlobal(QPoint(0, self._scale_btn.height()))
+        self._axis.move(pos)
+        self._axis.show()
+        self._axis.raise_()
 
     def _on_axis_range_changed(self, xmin, xmax, ymin, ymax) -> None:
         self._plot.set_x_range(xmin, xmax)

@@ -22,7 +22,8 @@ class ExpressionError(Exception):
 
 FUNCTIONS: dict[str, Callable] = {
     "abs": np.abs,
-    # futuras: "sin": np.sin, "cos": np.cos, "sqrt": np.sqrt, "log": np.log, ...
+    "sqrt": np.sqrt,
+    # futuras: "sin": np.sin, "cos": np.cos, "log": np.log, ...
 }
 
 _BINOPS = {

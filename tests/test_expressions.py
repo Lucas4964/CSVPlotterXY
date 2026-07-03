@@ -40,6 +40,17 @@ def test_abs_and_constants():
     assert np.allclose(ev("2e-3 * A")[0], 2e-3 * A)
 
 
+def test_sqrt():
+    assert np.allclose(ev("sqrt(A)")[0], np.sqrt(A))
+    assert np.allclose(ev("sqrt(A * B)")[0], np.sqrt(A * B))
+    # sqrt of a negative yields nan (errstate ignores the warning)
+    neg = {"n": np.array([-1.0, 4.0])}
+    vals, _, _ = evaluate("sqrt(n)", lambda k: neg[k])
+    assert np.isnan(vals[0]) and vals[1] == 2.0
+    # sqrt is now a known function (no longer "desconhecida")
+    assert collect_series_names("sqrt(A) + B") == {"A", "B"}
+
+
 def test_string_reference():
     vals, names, _ = ev('"der(v)" + 1')
     assert np.allclose(vals, WEIRD + 1)

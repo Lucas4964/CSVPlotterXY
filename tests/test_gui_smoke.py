@@ -264,6 +264,47 @@ def test_goto_x_api_and_validation(win, app):
     assert not (xmin <= xmax + 1.0 <= xmax)
 
 
+def test_set_curve_color_persists_across_theme(win, app):
+    key = next(iter(win._plot._curves))
+    win._plot.set_curve_color(key, "#ff0000")
+    app.processEvents()
+    assert win._plot._color_of[key] == "#ff0000"
+    assert win._plot._curves[key].opts["pen"].color().name() == "#ff0000"
+    assert win._plot._zoom_curves[key].opts["pen"].color().name() == "#ff0000"
+    # user color survives a theme toggle (override wins over palette)
+    win._toggle_theme()
+    app.processEvents()
+    assert win._plot._color_of[key] == "#ff0000"
+    assert win._plot._curves[key].opts["pen"].color().name() == "#ff0000"
+    # and survives unchecking + rechecking the series (same key)
+    ref = SeriesRef("column", file_ids(win)[0], "P1")
+    item = find_item(win, ref)
+    item.setCheckState(Qt.CheckState.Unchecked)
+    app.processEvents()
+    item.setCheckState(Qt.CheckState.Checked)
+    app.processEvents()
+    assert win._plot._curves[key].opts["pen"].color().name() == "#ff0000"
+
+
+def test_axis_popup_wiring(win, app):
+    # AxisPanel is a standalone Popup window, not embedded in the splitter
+    assert win._axis.parent() is None
+    assert win._axis.windowFlags() & Qt.WindowType.Popup
+    win._open_axis_popup()
+    app.processEvents()
+    assert win._axis.isVisible()
+    # applying a range from the popup still drives the plot
+    win._axis._fields["xmin"].setText("0.1")
+    win._axis._fields["xmax"].setText("0.6")
+    win._axis._fields["ymin"].setText("0")
+    win._axis._fields["ymax"].setText("8")
+    win._axis._on_apply()
+    app.processEvents()
+    x0, x1, _, _ = win._plot.view_ranges()
+    assert abs(x0 - 0.1) < 1e-6 and abs(x1 - 0.6) < 1e-6
+    win._axis.hide()
+
+
 def test_click_tooltip(win, app):
     win.resize(1200, 700)
     win._plot.set_x_range(0.0, 0.9)
