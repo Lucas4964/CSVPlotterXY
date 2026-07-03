@@ -274,8 +274,7 @@ class MainWindow(QMainWindow):
         self._axis.raise_()
 
     def _on_axis_range_changed(self, xmin, xmax, ymin, ymax) -> None:
-        self._plot.set_x_range(xmin, xmax)
-        self._plot.set_y_range(ymin, ymax)
+        self._plot.set_manual_ranges(xmin, xmax, ymin, ymax)
 
     def _on_goto_x(self) -> None:
         rng = self._plot.x_range()

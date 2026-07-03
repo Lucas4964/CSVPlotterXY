@@ -176,13 +176,22 @@ class PlotArea(QWidget):
     def autorange(self) -> None:
         self._pw.getViewBox().enableAutoRange(x=True, y=True)
         self._pw.autoRange()
+        # reset limits to the data-based defaults (undo any manual expansion)
+        self.apply_view_limits()
 
     # -------------------------------------------------------- axis scaling
 
-    def apply_view_limits(self) -> None:
+    def apply_view_limits(
+            self, manual: tuple[float, float, float, float] | None = None) -> None:
         """Constrain zoom so the curve never vanishes (peak-downsampling
         collapses to zero points on extreme zoom-out) and pan stays near
-        the data."""
+        the data.
+
+        When `manual` (xmin, xmax, ymin, ymax) is given, the limits are
+        widened to the union of the data extent and the requested view so
+        a manually-entered range is honored exactly instead of clamped.
+        Mouse-driven zoom/pan is unaffected: it only ever runs with the
+        data-based limits (manual is None)."""
         vb = self._plot_item.getViewBox()
         if self._x is None or len(self._x) == 0:
             vb.setLimits(xMin=None, xMax=None, yMin=None, yMax=None,
@@ -208,11 +217,32 @@ class PlotArea(QWidget):
         yspan = (ymax - ymin) or 1.0
         ypad = 0.05 * yspan
 
+        x_lo, x_hi = xmin - xpad, xmax + xpad
+        y_lo, y_hi = ymin - ypad, ymax + ypad
+        max_xrange, max_yrange = 20 * xspan, 20 * yspan
+        min_yrange = yspan / 1e4
+
+        if manual is not None:
+            mxlo, mxhi, mylo, myhi = manual
+            x_lo, x_hi = min(x_lo, mxlo), max(x_hi, mxhi)
+            y_lo, y_hi = min(y_lo, mylo), max(y_hi, myhi)
+            max_xrange = max(max_xrange, mxhi - mxlo)
+            max_yrange = max(max_yrange, myhi - mylo)
+            min_xrange = min(min_xrange, mxhi - mxlo)
+            min_yrange = min(min_yrange, myhi - mylo)
+
         vb.setLimits(
-            xMin=xmin - xpad, xMax=xmax + xpad,
-            yMin=ymin - ypad, yMax=ymax + ypad,
-            minXRange=min_xrange, maxXRange=20 * xspan,
-            minYRange=yspan / 1e4, maxYRange=20 * yspan)
+            xMin=x_lo, xMax=x_hi, yMin=y_lo, yMax=y_hi,
+            minXRange=min_xrange, maxXRange=max_xrange,
+            minYRange=min_yrange, maxYRange=max_yrange)
+
+    def set_manual_ranges(self, xmin: float, xmax: float,
+                          ymin: float, ymax: float) -> None:
+        """Set the visible region to exactly the requested limits,
+        overriding the data-based clamp (Desmos-style)."""
+        self.apply_view_limits(manual=(xmin, xmax, ymin, ymax))
+        self._plot_item.getViewBox().setRange(
+            xRange=(xmin, xmax), yRange=(ymin, ymax), padding=0)
 
     def set_x_range(self, lo: float, hi: float) -> None:
         self._plot_item.getViewBox().setXRange(lo, hi, padding=0)

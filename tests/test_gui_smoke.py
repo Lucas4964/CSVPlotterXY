@@ -249,6 +249,35 @@ def test_axis_panel_apply_and_invalid(win, app):
     assert "e74c3c" in win._axis._fields["xmin"].styleSheet()
 
 
+def test_manual_ranges_override_data_limits(win, app):
+    # Desmos-style: manual limits define the viewport exactly, even far
+    # beyond the plotted data (P1 spans 0..9).
+    win._plot.set_manual_ranges(-10.0, 10.0, -10.0, 10000.0)
+    app.processEvents()
+    x0, x1, y0, y1 = win._plot.view_ranges()
+    assert abs(x0 + 10) < 1e-6 and abs(x1 - 10) < 1e-6
+    assert abs(y0 + 10) < 1e-6 and abs(y1 - 10000) < 1e-6
+    # a window narrower than the index gap (=1) is also honored
+    win._plot.set_manual_ranges(2.0, 2.5, 0.0, 1.0)
+    app.processEvents()
+    x0, x1, _, _ = win._plot.view_ranges()
+    assert abs(x0 - 2.0) < 1e-6 and abs(x1 - 2.5) < 1e-6
+    # via the popup Apply path (range_changed -> set_manual_ranges)
+    win._axis._fields["xmin"].setText("-5")
+    win._axis._fields["xmax"].setText("5")
+    win._axis._fields["ymin"].setText("-100")
+    win._axis._fields["ymax"].setText("5000")
+    win._axis._on_apply()
+    app.processEvents()
+    x0, x1, y0, y1 = win._plot.view_ranges()
+    assert abs(x1 - 5) < 1e-6 and abs(y1 - 5000) < 1e-6
+    # Auto resets limits back to data-based
+    win._plot.autorange()
+    app.processEvents()
+    _, x1b, _, y1b = win._plot.view_ranges()
+    assert x1b < 100 and y1b < 100
+
+
 def test_zoom_out_limit_keeps_curve(win, app):
     # X = time (span ~0.9) so maxXRange ~= 18
     win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
