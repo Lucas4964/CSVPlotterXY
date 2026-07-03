@@ -7,11 +7,12 @@ import os
 
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox, QPushButton,
-    QSplitter, QToolBar,
+    QApplication, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox,
+    QPushButton, QSplitter, QToolBar, QVBoxLayout, QWidget,
 )
 
 from . import __version__
+from .axis_panel import AxisPanel
 from .data_model import DataLoadError, load_csv
 from .plot_area import PlotArea
 from .project import INDEX_NAME, Project, ProjectError, SeriesRef
@@ -53,6 +54,10 @@ class MainWindow(QMainWindow):
         self._zoom_btn.toggled.connect(self._plot_zoom_toggled)
         toolbar.addWidget(self._zoom_btn)
 
+        goto_btn = QPushButton("Ir para X")
+        goto_btn.clicked.connect(self._on_goto_x)
+        toolbar.addWidget(goto_btn)
+
         self._theme_btn = QPushButton()
         self._theme_btn.clicked.connect(self._toggle_theme)
         toolbar.addWidget(self._theme_btn)
@@ -64,15 +69,23 @@ class MainWindow(QMainWindow):
         self._panel = SeriesPanel()
         self._plot = PlotArea()
         self._readout = ReadoutPanel()
+        self._axis = AxisPanel()
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addWidget(self._readout, stretch=1)
+        right_layout.addWidget(self._axis)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._panel)
         splitter.addWidget(self._plot)
-        splitter.addWidget(self._readout)
+        splitter.addWidget(right)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([280, 760, 230])
+        splitter.setSizes([280, 760, 240])
         splitter.setCollapsible(1, False)
         self.setCentralWidget(splitter)
 
@@ -87,6 +100,9 @@ class MainWindow(QMainWindow):
         self._panel.edit_series_requested.connect(self._on_edit_series)
         self._panel.delete_series_requested.connect(self._on_delete_series)
         self._plot.cursor_moved.connect(self._readout.update_values)
+        self._axis.range_changed.connect(self._on_axis_range_changed)
+        self._axis.auto_requested.connect(lambda: self._plot.autorange())
+        self._plot.view_range_changed.connect(self._axis.set_ranges)
 
         self._apply_theme()
 
@@ -245,6 +261,37 @@ class MainWindow(QMainWindow):
 
     def _plot_zoom_toggled(self, checked: bool) -> None:
         self._plot.set_zoom_visible(checked)
+
+    def _on_axis_range_changed(self, xmin, xmax, ymin, ymax) -> None:
+        self._plot.set_x_range(xmin, xmax)
+        self._plot.set_y_range(ymin, ymax)
+
+    def _on_goto_x(self) -> None:
+        rng = self._plot.x_range()
+        if rng is None:
+            QMessageBox.information(
+                self, "Ir para X", "Plote uma série primeiro.")
+            return
+        xmin, xmax = rng
+        text, ok = QInputDialog.getText(
+            self, "Ir para X",
+            f"Valor de X (entre {xmin:.6g} e {xmax:.6g}):")
+        if not ok:
+            return
+        try:
+            value = float(text.strip().replace(",", "."))
+        except ValueError:
+            QMessageBox.warning(self, "Ir para X",
+                                f'Valor inválido: "{text}".')
+            return
+        if not (xmin <= value <= xmax):
+            QMessageBox.warning(
+                self, "Ir para X",
+                f"O valor {value:.6g} está fora do intervalo "
+                f"[{xmin:.6g}, {xmax:.6g}].")
+            return
+        self._plot.set_cursor_x(value)
+        self.statusBar().showMessage(f"Cursor posicionado em X = {value:.6g}", 4000)
 
     def _toggle_theme(self) -> None:
         self._theme = THEMES["light" if self._theme.name == "dark" else "dark"]

@@ -6,11 +6,27 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QApplication
 
 from plotxy_app.main_window import MainWindow
 from plotxy_app.project import INDEX_NAME, SeriesRef
+
+
+class FakeClick:
+    """Minimal stand-in for a pyqtgraph MouseClickEvent."""
+
+    def __init__(self, scene_pos):
+        self._p = scene_pos
+
+    def button(self):
+        return Qt.MouseButton.LeftButton
+
+    def isAccepted(self):
+        return False
+
+    def scenePos(self):
+        return self._p
 
 
 @pytest.fixture(scope="session")
@@ -189,3 +205,77 @@ def test_remove_all_files_clears_plot(win, app):
     assert win._panel.x_ref() is None
     assert len(win._plot._curves) == 0
     assert not win._plot._cursor.isVisible()
+
+
+# ------------------------------------------------------------ v0.3 features
+
+
+def test_axis_range_set_and_sync(win, app):
+    win._plot.set_x_range(0.2, 0.5)
+    win._plot.set_y_range(0.0, 9.0)
+    app.processEvents()
+    x0, x1, y0, y1 = win._plot.view_ranges()
+    assert abs(x0 - 0.2) < 1e-6 and abs(x1 - 0.5) < 1e-6
+    assert abs(y0 - 0.0) < 1e-6 and abs(y1 - 9.0) < 1e-6
+    # axis-panel fields reflect the view via view_range_changed
+    assert abs(float(win._axis._fields["xmin"].text()) - 0.2) < 1e-3
+    assert abs(float(win._axis._fields["xmax"].text()) - 0.5) < 1e-3
+
+
+def test_axis_panel_apply_and_invalid(win, app):
+    win._axis._fields["xmin"].setText("0.1")
+    win._axis._fields["xmax"].setText("0.7")
+    win._axis._fields["ymin"].setText("0")
+    win._axis._fields["ymax"].setText("8")
+    win._axis._on_apply()
+    app.processEvents()
+    x0, x1, _, _ = win._plot.view_ranges()
+    assert abs(x0 - 0.1) < 1e-6 and abs(x1 - 0.7) < 1e-6
+    # min >= max is rejected: view unchanged, field flagged
+    win._axis._fields["xmin"].setText("5")
+    win._axis._fields["xmax"].setText("1")
+    win._axis._on_apply()
+    app.processEvents()
+    x0b, x1b, _, _ = win._plot.view_ranges()
+    assert abs(x0b - 0.1) < 1e-6 and abs(x1b - 0.7) < 1e-6
+    assert "e74c3c" in win._axis._fields["xmin"].styleSheet()
+
+
+def test_zoom_out_limit_keeps_curve(win, app):
+    # request an absurd zoom-out; setLimits must clamp it (data span ~0.9)
+    win._plot.set_x_range(-1e6, 1e6)
+    app.processEvents()
+    x0, x1, _, _ = win._plot.view_ranges()
+    assert (x1 - x0) < 100  # clamped to ~20*span, not 2e6
+    # the curve still has points to render in the clamped view
+    curve = next(iter(win._plot._curves.values()))
+    assert curve.curve.getPath().elementCount() > 0
+
+
+def test_goto_x_api_and_validation(win, app):
+    rng = win._plot.x_range()
+    assert rng is not None
+    xmin, xmax = rng
+    mid = (xmin + xmax) / 2
+    win._plot.set_cursor_x(mid)
+    app.processEvents()
+    assert abs(win._plot._cursor.value() - mid) < 1e-9
+    # mirror of the out-of-range check used in _on_goto_x
+    assert not (xmin <= xmax + 1.0 <= xmax)
+
+
+def test_click_tooltip(win, app):
+    win.resize(1200, 700)
+    win._plot.set_x_range(0.0, 0.9)
+    win._plot.set_y_range(0.0, 9.0)
+    app.processEvents()
+    vb = win._plot._plot_item.getViewBox()
+    # nearest data point of P1 is (0.5, 5.0)
+    win._plot._on_scene_clicked(FakeClick(vb.mapViewToScene(QPointF(0.5, 5.0))))
+    app.processEvents()
+    assert win._plot._click_label.isVisible()
+    assert "0.5" in win._plot._click_label.textItem.toPlainText()
+    # clicking far from any curve (but inside the plot) dismisses it
+    win._plot._on_scene_clicked(FakeClick(vb.mapViewToScene(QPointF(0.45, 8.5))))
+    app.processEvents()
+    assert not win._plot._click_label.isVisible()

@@ -25,6 +25,7 @@ class PlotArea(QWidget):
     """
 
     cursor_moved = Signal(float, list, bool)
+    view_range_changed = Signal(float, float, float, float)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -62,6 +63,20 @@ class PlotArea(QWidget):
         self._markers = pg.ScatterPlotItem(size=9, pxMode=True)
         self._markers.setZValue(100)
         self._pw.addItem(self._markers)
+
+        # click tooltip (Desmos-style): single point, dismissable
+        self._click_marker = pg.ScatterPlotItem(size=11, pxMode=True)
+        self._click_marker.setZValue(110)
+        self._pw.addItem(self._click_marker)
+        self._click_label = pg.TextItem(anchor=(0, 1))
+        self._click_label.setZValue(111)
+        self._pw.addItem(self._click_label)
+        self._click_label.hide()
+        self._pw.scene().sigMouseClicked.connect(self._on_scene_clicked)
+
+        # keep axis-scale fields in sync with mouse zoom/pan
+        self._plot_item.getViewBox().sigRangeChanged.connect(
+            self._on_view_range_changed)
 
         # zoom region on the main plot
         self._region = pg.LinearRegionItem(movable=True)
@@ -133,8 +148,12 @@ class PlotArea(QWidget):
             self._cursor.setBounds((xmin, xmax))
             self._cursor.setValue((xmin + xmax) / 2)
             self._reset_region()
+            self.apply_view_limits()
             self._pw.autoRange()
+        else:
+            self.apply_view_limits()
 
+        self._clear_tooltip()
         has_curves = bool(self._curves)
         self._cursor.setVisible(has_curves)
         self._markers.setVisible(has_curves)
@@ -149,10 +168,67 @@ class PlotArea(QWidget):
         self._cursor.hide()
         self._markers.hide()
         self._markers.setData([])
+        self._clear_tooltip()
         self.cursor_moved.emit(float("nan"), [], False)
 
     def autorange(self) -> None:
+        self._pw.getViewBox().enableAutoRange(x=True, y=True)
         self._pw.autoRange()
+
+    # -------------------------------------------------------- axis scaling
+
+    def apply_view_limits(self) -> None:
+        """Constrain zoom so the curve never vanishes (peak-downsampling
+        collapses to zero points on extreme zoom-out) and pan stays near
+        the data."""
+        vb = self._plot_item.getViewBox()
+        if self._x is None or len(self._x) == 0:
+            vb.setLimits(xMin=None, xMax=None, yMin=None, yMax=None,
+                         minXRange=None, maxXRange=None,
+                         minYRange=None, maxYRange=None)
+            return
+        xmin, xmax = float(np.nanmin(self._x)), float(np.nanmax(self._x))
+        xspan = (xmax - xmin) or 1.0
+        xpad = 0.05 * xspan
+        if self._x_kind != _NON_MONOTONIC and len(self._x) > 1:
+            gaps = np.abs(np.diff(self._x))
+            gaps = gaps[gaps > 0]
+            min_xrange = float(3 * gaps.max()) if len(gaps) else xspan / 1e4
+        else:
+            min_xrange = xspan / 1e4
+
+        if self._ys:
+            stacked = np.concatenate([y[np.isfinite(y)] for y in self._ys.values()
+                                      if np.any(np.isfinite(y))] or [np.array([0.0])])
+            ymin, ymax = float(stacked.min()), float(stacked.max())
+        else:
+            ymin, ymax = -1.0, 1.0
+        yspan = (ymax - ymin) or 1.0
+        ypad = 0.05 * yspan
+
+        vb.setLimits(
+            xMin=xmin - xpad, xMax=xmax + xpad,
+            yMin=ymin - ypad, yMax=ymax + ypad,
+            minXRange=min_xrange, maxXRange=20 * xspan,
+            minYRange=yspan / 1e4, maxYRange=20 * yspan)
+
+    def set_x_range(self, lo: float, hi: float) -> None:
+        self._plot_item.getViewBox().setXRange(lo, hi, padding=0)
+
+    def set_y_range(self, lo: float, hi: float) -> None:
+        self._plot_item.getViewBox().setYRange(lo, hi, padding=0)
+
+    def view_ranges(self) -> tuple[float, float, float, float]:
+        (x0, x1), (y0, y1) = self._plot_item.getViewBox().viewRange()
+        return float(x0), float(x1), float(y0), float(y1)
+
+    def x_range(self) -> tuple[float, float] | None:
+        if self._x is None or len(self._x) == 0:
+            return None
+        return float(np.nanmin(self._x)), float(np.nanmax(self._x))
+
+    def set_cursor_x(self, value: float) -> None:
+        self._cursor.setValue(value)
 
     def set_zoom_visible(self, visible: bool) -> None:
         self._zoom_pw.setVisible(visible)
@@ -188,6 +264,8 @@ class PlotArea(QWidget):
             pen = pg.mkPen(color, width=2)
             self._curves[key].setPen(pen)
             self._zoom_curves[key].setPen(pen)
+        if self._click_label.isVisible():
+            self._apply_tooltip_theme()
         self._on_cursor_moved()
 
     # ------------------------------------------------------------ internal
@@ -247,6 +325,72 @@ class PlotArea(QWidget):
             self._region.setRegion(rng)
         finally:
             self._syncing = False
+
+    def _on_view_range_changed(self, *_args) -> None:
+        if self._x is None:
+            return
+        x0, x1, y0, y1 = self.view_ranges()
+        self.view_range_changed.emit(x0, x1, y0, y1)
+
+    # ------------------------------------------------------ click tooltip
+
+    def _on_scene_clicked(self, event) -> None:
+        if self._x is None or not self._curves:
+            return
+        try:
+            left = event.button() == Qt.MouseButton.LeftButton
+        except Exception:
+            left = True
+        if not left or event.isAccepted():
+            return
+        vb = self._plot_item.getViewBox()
+        if not vb.sceneBoundingRect().contains(event.scenePos()):
+            return
+        pt = vb.mapSceneToView(event.scenePos())
+        cx, cy = pt.x(), pt.y()
+        pw_, ph_ = vb.viewPixelSize()
+
+        best = None  # (dist2_px, key, xi, yi)
+        dx = (self._x - cx) / (pw_ or 1.0)
+        for key, y in self._ys.items():
+            dy = (y - cy) / (ph_ or 1.0)
+            d2 = dx * dx + dy * dy
+            if not np.any(np.isfinite(d2)):
+                continue
+            idx = int(np.nanargmin(d2))
+            if best is None or d2[idx] < best[0]:
+                best = (float(d2[idx]), key, float(self._x[idx]), float(y[idx]))
+
+        if best is None or best[0] ** 0.5 > 25.0:
+            self._clear_tooltip()
+            return
+        self._show_tooltip(best[1], best[2], best[3])
+
+    def _show_tooltip(self, key: str, x: float, y: float) -> None:
+        color = self._color_of.get(key, "#888888")
+        pen_col = ("#ffffff" if self._theme and self._theme.name == "dark"
+                   else "#000000")
+        self._click_marker.setData(
+            [{"pos": (x, y), "brush": pg.mkBrush(color),
+              "pen": pg.mkPen(pen_col, width=1.5), "size": 11}])
+        self._click_label.setText(f"({x:.6g}, {y:.6g})")
+        self._click_label.setPos(x, y)
+        self._apply_tooltip_theme()
+        self._click_label.show()
+
+    def _clear_tooltip(self) -> None:
+        self._click_marker.setData([])
+        self._click_label.hide()
+
+    def _apply_tooltip_theme(self) -> None:
+        t = self._theme
+        if t is None:
+            return
+        self._click_label.setColor(QColor(t.text))
+        fill = QColor(t.panel); fill.setAlpha(235)
+        self._click_label.fill = pg.mkBrush(fill)
+        self._click_label.border = pg.mkPen(t.border, width=1)
+        self._click_label.update()
 
     def _on_cursor_moved(self) -> None:
         if self._x is None or not self._curves:
