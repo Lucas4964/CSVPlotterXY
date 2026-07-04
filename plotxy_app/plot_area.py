@@ -82,6 +82,8 @@ class PlotArea(QWidget):
         self._theme: Theme | None = None
         self._v_enabled = True   # vertical cursor shown by default
         self._h_enabled = False  # horizontal cursor off by default
+        self._click_interpolate = False  # click-tooltip snaps to samples
+        self._y_bounds: tuple[float, float] | None = None
         self._syncing = False  # guard: region <-> zoom-panel feedback loop
 
         layout = QVBoxLayout(self)
@@ -185,12 +187,13 @@ class PlotArea(QWidget):
                      or palette[len(self._color_of) % len(palette)])
             self._color_of[key] = color
             pen = pg.mkPen(color, width=2)
+            # no auto-downsampling: pyqtgraph's "peak" mode collapses to an
+            # empty path at extreme zoom-out, making the curve vanish;
+            # clipToView keeps extreme zoom-IN cheap and correct
             curve = self._pw.plot(x, y, pen=pen, name=label, connect="finite")
             curve.setClipToView(True)
-            curve.setDownsampling(auto=True, method="peak")
             self._curves[key] = curve
             zcurve = self._zoom_pw.plot(x, y, pen=pen, connect="finite")
-            zcurve.setDownsampling(auto=True, method="peak")
             self._zoom_curves[key] = zcurve
         for key in list(self._ys):
             if key not in wanted:
@@ -201,10 +204,7 @@ class PlotArea(QWidget):
             self._cursor.setBounds((xmin, xmax))
             self._cursor.setValue((xmin + xmax) / 2)
             self._reset_region()
-            self.apply_view_limits()
             self._pw.autoRange()
-        else:
-            self.apply_view_limits()
         self._update_hcursor_bounds(reset=x_changed)
 
         self._clear_tooltip()
@@ -227,6 +227,7 @@ class PlotArea(QWidget):
         self._hcursor.hide()
         self._h_markers.hide()
         self._h_markers.setData([])
+        self._y_bounds = None
         self._clear_tooltip()
         self.v_cursor_moved.emit(float("nan"), [])
         self.h_cursor_moved.emit(float("nan"), [])
@@ -234,71 +235,13 @@ class PlotArea(QWidget):
     def autorange(self) -> None:
         self._pw.getViewBox().enableAutoRange(x=True, y=True)
         self._pw.autoRange()
-        # reset limits to the data-based defaults (undo any manual expansion)
-        self.apply_view_limits()
 
     # -------------------------------------------------------- axis scaling
 
-    def apply_view_limits(
-            self, manual: tuple[float, float, float, float] | None = None) -> None:
-        """Constrain zoom so the curve never vanishes (peak-downsampling
-        collapses to zero points on extreme zoom-out) and pan stays near
-        the data.
-
-        When `manual` (xmin, xmax, ymin, ymax) is given, the limits are
-        widened to the union of the data extent and the requested view so
-        a manually-entered range is honored exactly instead of clamped.
-        Mouse-driven zoom/pan is unaffected: it only ever runs with the
-        data-based limits (manual is None)."""
-        vb = self._plot_item.getViewBox()
-        if self._x is None or len(self._x) == 0:
-            vb.setLimits(xMin=None, xMax=None, yMin=None, yMax=None,
-                         minXRange=None, maxXRange=None,
-                         minYRange=None, maxYRange=None)
-            return
-        xmin, xmax = float(np.nanmin(self._x)), float(np.nanmax(self._x))
-        xspan = (xmax - xmin) or 1.0
-        xpad = 0.05 * xspan
-        if self._x_kind != _NON_MONOTONIC and len(self._x) > 1:
-            gaps = np.abs(np.diff(self._x))
-            gaps = gaps[gaps > 0]
-            min_xrange = float(3 * gaps.max()) if len(gaps) else xspan / 1e4
-        else:
-            min_xrange = xspan / 1e4
-
-        if self._ys:
-            stacked = np.concatenate([y[np.isfinite(y)] for y in self._ys.values()
-                                      if np.any(np.isfinite(y))] or [np.array([0.0])])
-            ymin, ymax = float(stacked.min()), float(stacked.max())
-        else:
-            ymin, ymax = -1.0, 1.0
-        yspan = (ymax - ymin) or 1.0
-        ypad = 0.05 * yspan
-
-        x_lo, x_hi = xmin - xpad, xmax + xpad
-        y_lo, y_hi = ymin - ypad, ymax + ypad
-        max_xrange, max_yrange = 20 * xspan, 20 * yspan
-        min_yrange = yspan / 1e4
-
-        if manual is not None:
-            mxlo, mxhi, mylo, myhi = manual
-            x_lo, x_hi = min(x_lo, mxlo), max(x_hi, mxhi)
-            y_lo, y_hi = min(y_lo, mylo), max(y_hi, myhi)
-            max_xrange = max(max_xrange, mxhi - mxlo)
-            max_yrange = max(max_yrange, myhi - mylo)
-            min_xrange = min(min_xrange, mxhi - mxlo)
-            min_yrange = min(min_yrange, myhi - mylo)
-
-        vb.setLimits(
-            xMin=x_lo, xMax=x_hi, yMin=y_lo, yMax=y_hi,
-            minXRange=min_xrange, maxXRange=max_xrange,
-            minYRange=min_yrange, maxYRange=max_yrange)
-
     def set_manual_ranges(self, xmin: float, xmax: float,
                           ymin: float, ymax: float) -> None:
-        """Set the visible region to exactly the requested limits,
-        overriding the data-based clamp (Desmos-style)."""
-        self.apply_view_limits(manual=(xmin, xmax, ymin, ymax))
+        """Set the visible region to exactly the requested limits
+        (Desmos-style). Zoom/pan is unlimited, so nothing to clamp."""
         self._plot_item.getViewBox().setRange(
             xRange=(xmin, xmax), yRange=(ymin, ymax), padding=0)
 
@@ -320,6 +263,15 @@ class PlotArea(QWidget):
     def set_cursor_x(self, value: float) -> None:
         self._cursor.setValue(value)
 
+    def set_cursor_y(self, value: float) -> None:
+        self._hcursor.setValue(value)
+
+    def cursor_positions(self) -> tuple[float, float]:
+        return float(self._cursor.value()), float(self._hcursor.value())
+
+    def y_data_range(self) -> tuple[float, float] | None:
+        return self._y_bounds
+
     def set_cursor_visible(self, orientation: str, visible: bool) -> None:
         """Show/hide the vertical ('v') or horizontal ('h') cursor."""
         has_curves = bool(self._curves)
@@ -338,9 +290,11 @@ class PlotArea(QWidget):
         finite = [y[np.isfinite(y)] for y in self._ys.values()
                   if np.any(np.isfinite(y))]
         if not finite:
+            self._y_bounds = None
             return
         stacked = np.concatenate(finite)
         ymin, ymax = float(stacked.min()), float(stacked.max())
+        self._y_bounds = (ymin, ymax)
         self._hcursor.setBounds((ymin, ymax))
         cur = float(self._hcursor.value())
         if reset or not (ymin <= cur <= ymax):
@@ -497,21 +451,73 @@ class PlotArea(QWidget):
         cx, cy = pt.x(), pt.y()
         pw_, ph_ = vb.viewPixelSize()
 
-        best = None  # (dist2_px, key, xi, yi)
-        dx = (self._x - cx) / (pw_ or 1.0)
+        if self._click_interpolate:
+            best = self._nearest_on_curve(cx, cy, pw_ or 1.0, ph_ or 1.0)
+        else:
+            best = self._nearest_sample(cx, cy, pw_ or 1.0, ph_ or 1.0)
+
+        if best is None or best[0] ** 0.5 > 25.0:
+            self._clear_tooltip()
+            return
+        self._show_tooltip(best[1], best[2], best[3])
+
+    def set_click_interpolation(self, enabled: bool) -> None:
+        """When enabled, clicking anywhere along a curve selects the
+        interpolated point on the nearest segment instead of snapping to
+        the nearest original sample."""
+        self._click_interpolate = enabled
+
+    def _nearest_sample(self, cx: float, cy: float,
+                        pw_: float, ph_: float):
+        """Closest original data point to the click, in pixel space.
+        Returns (dist2_px, key, x, y) or None."""
+        best = None
+        dx = (self._x - cx) / pw_
         for key, y in self._ys.items():
-            dy = (y - cy) / (ph_ or 1.0)
+            dy = (y - cy) / ph_
             d2 = dx * dx + dy * dy
             if not np.any(np.isfinite(d2)):
                 continue
             idx = int(np.nanargmin(d2))
             if best is None or d2[idx] < best[0]:
                 best = (float(d2[idx]), key, float(self._x[idx]), float(y[idx]))
+        return best
 
-        if best is None or best[0] ** 0.5 > 25.0:
-            self._clear_tooltip()
-            return
-        self._show_tooltip(best[1], best[2], best[3])
+    def _nearest_on_curve(self, cx: float, cy: float,
+                          pw_: float, ph_: float):
+        """Closest point on any curve segment to the click (interpolated),
+        in pixel space. Returns (dist2_px, key, x, y) or None."""
+        if len(self._x) < 2:
+            return self._nearest_sample(cx, cy, pw_, ph_)
+        best = None
+        # pixel-space coordinates relative to the click (click at origin)
+        px = (self._x - cx) / pw_
+        for key, y in self._ys.items():
+            py = (y - cy) / ph_
+            p0x, p1x = px[:-1], px[1:]
+            p0y, p1y = py[:-1], py[1:]
+            vx, vy = p1x - p0x, p1y - p0y
+            len2 = vx * vx + vy * vy
+            valid = (np.isfinite(p0x) & np.isfinite(p0y)
+                     & np.isfinite(p1x) & np.isfinite(p1y))
+            with np.errstate(invalid="ignore", divide="ignore"):
+                t = np.where(len2 > 0,
+                             -(p0x * vx + p0y * vy) / np.where(len2 > 0, len2, 1.0),
+                             0.0)
+            t = np.clip(t, 0.0, 1.0)
+            qx = p0x + t * vx
+            qy = p0y + t * vy
+            d2 = qx * qx + qy * qy
+            d2 = np.where(valid, d2, np.inf)
+            if not np.any(np.isfinite(d2)):
+                continue
+            i = int(np.argmin(d2))
+            if best is None or d2[i] < best[0]:
+                ti = float(t[i])
+                x_int = float(self._x[i] + ti * (self._x[i + 1] - self._x[i]))
+                y_int = float(y[i] + ti * (y[i + 1] - y[i]))
+                best = (float(d2[i]), key, x_int, y_int)
+        return best
 
     def _show_tooltip(self, key: str, x: float, y: float) -> None:
         color = self._color_of.get(key, "#888888")

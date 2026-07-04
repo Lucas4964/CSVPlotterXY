@@ -7,7 +7,7 @@ import os
 
 from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox,
+    QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
     QPushButton, QSplitter, QToolBar,
 )
 
@@ -15,6 +15,7 @@ from . import __version__
 from .axis_panel import AxisPanel
 from .cursor_menu import CursorMenu
 from .data_model import DataLoadError, load_csv
+from .goto_panel import GotoPanel
 from .plot_area import PlotArea
 from .project import INDEX_NAME, Project, ProjectError, SeriesRef
 from .readout_panel import CursorReadout
@@ -55,9 +56,9 @@ class MainWindow(QMainWindow):
         self._zoom_btn.toggled.connect(self._plot_zoom_toggled)
         toolbar.addWidget(self._zoom_btn)
 
-        goto_btn = QPushButton("Ir para X")
-        goto_btn.clicked.connect(self._on_goto_x)
-        toolbar.addWidget(goto_btn)
+        self._goto_btn = QPushButton("Ir para")
+        self._goto_btn.clicked.connect(self._open_goto_popup)
+        toolbar.addWidget(self._goto_btn)
 
         self._cursors_btn = QPushButton("Cursores")
         self._cursors_btn.clicked.connect(self._open_cursor_popup)
@@ -106,6 +107,12 @@ class MainWindow(QMainWindow):
         self._cursor_menu.setWindowFlags(Qt.WindowType.Popup)
         self._cursor_menu.cursors_changed.connect(self._on_cursors_changed)
 
+        # "Ir para" popup: position cursors by value
+        self._goto = GotoPanel()
+        self._goto.setWindowFlags(Qt.WindowType.Popup)
+        self._goto.set_enabled_states(*self._cursor_menu.states())
+        self._goto.goto_requested.connect(self._on_goto_requested)
+
         # --- status bar
         self._status_info = QLabel("")
         self.statusBar().addWidget(self._status_info)
@@ -120,6 +127,8 @@ class MainWindow(QMainWindow):
         self._plot.h_cursor_moved.connect(self._h_readout.update_values)
         self._v_readout.color_change_requested.connect(self._plot.prompt_color)
         self._h_readout.color_change_requested.connect(self._plot.prompt_color)
+        self._cursor_menu.interpolation_changed.connect(
+            self._plot.set_click_interpolation)
         self._axis.range_changed.connect(self._on_axis_range_changed)
         self._axis.auto_requested.connect(lambda: self._plot.autorange())
         self._plot.view_range_changed.connect(self._axis.set_ranges)
@@ -306,36 +315,55 @@ class MainWindow(QMainWindow):
         self._h_readout.setVisible(horizontal)
         self._plot.set_cursor_visible("v", vertical)
         self._plot.set_cursor_visible("h", horizontal)
+        # "Ir para" fields stay visible; only their enabled state follows
+        self._goto.set_enabled_states(vertical, horizontal)
 
     def _on_axis_range_changed(self, xmin, xmax, ymin, ymax) -> None:
         self._plot.set_manual_ranges(xmin, xmax, ymin, ymax)
 
-    def _on_goto_x(self) -> None:
-        rng = self._plot.x_range()
-        if rng is None:
+    def _open_goto_popup(self) -> None:
+        if self._plot.x_range() is None:
             QMessageBox.information(
-                self, "Ir para X", "Plote uma série primeiro.")
+                self, "Ir para", "Plote uma série primeiro.")
             return
-        xmin, xmax = rng
-        text, ok = QInputDialog.getText(
-            self, "Ir para X",
-            f"Valor de X (entre {xmin:.6g} e {xmax:.6g}):")
-        if not ok:
-            return
-        try:
-            value = float(text.strip().replace(",", "."))
-        except ValueError:
-            QMessageBox.warning(self, "Ir para X",
-                                f'Valor inválido: "{text}".')
-            return
-        if not (xmin <= value <= xmax):
-            QMessageBox.warning(
-                self, "Ir para X",
-                f"O valor {value:.6g} está fora do intervalo "
-                f"[{xmin:.6g}, {xmax:.6g}].")
-            return
-        self._plot.set_cursor_x(value)
-        self.statusBar().showMessage(f"Cursor posicionado em X = {value:.6g}", 4000)
+        cx, cy = self._plot.cursor_positions()
+        self._goto.set_positions(cx, cy)
+        self._goto.clear_error()
+        pos = self._goto_btn.mapToGlobal(QPoint(0, self._goto_btn.height()))
+        self._goto.move(pos)
+        self._goto.show()
+        self._goto.raise_()
+
+    def _on_goto_requested(self, x, y) -> None:
+        # validate both enabled fields against the data ranges before
+        # moving anything; errors are shown inline in the popup
+        if x is not None:
+            rng = self._plot.x_range()
+            if rng is None:
+                return
+            if not (rng[0] <= x <= rng[1]):
+                self._goto.show_error(
+                    f"X fora do intervalo [{rng[0]:.6g}, {rng[1]:.6g}].")
+                return
+        if y is not None:
+            yrng = self._plot.y_data_range()
+            if yrng is None:
+                return
+            if not (yrng[0] <= y <= yrng[1]):
+                self._goto.show_error(
+                    f"Y fora do intervalo [{yrng[0]:.6g}, {yrng[1]:.6g}].")
+                return
+        moved = []
+        if x is not None:
+            self._plot.set_cursor_x(x)
+            moved.append(f"X = {x:.6g}")
+        if y is not None:
+            self._plot.set_cursor_y(y)
+            moved.append(f"Y = {y:.6g}")
+        if moved:
+            self._goto.hide()
+            self.statusBar().showMessage(
+                "Cursor posicionado em " + ", ".join(moved), 4000)
 
     def _toggle_theme(self) -> None:
         self._theme = THEMES["light" if self._theme.name == "dark" else "dark"]

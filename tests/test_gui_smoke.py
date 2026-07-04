@@ -300,17 +300,20 @@ def test_manual_ranges_override_data_limits(win, app):
     assert x1b < 100 and y1b < 100
 
 
-def test_zoom_out_limit_keeps_curve(win, app):
-    # X = time (span ~0.9) so maxXRange ~= 18
+def test_unlimited_zoom_keeps_curve(win, app):
     win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
     app.processEvents()
-    # request an absurd zoom-out; setLimits must clamp it
+    curve = next(iter(win._plot._curves.values()))
+    # extreme zoom-out: view honors the request exactly (no clamping) and
+    # the curve keeps all its points rendered (no downsampling collapse)
     win._plot.set_x_range(-1e6, 1e6)
     app.processEvents()
     x0, x1, _, _ = win._plot.view_ranges()
-    assert (x1 - x0) < 100  # clamped to ~20*span, not 2e6
-    # the curve still has points to render in the clamped view
-    curve = next(iter(win._plot._curves.values()))
+    assert abs((x1 - x0) - 2e6) < 1.0
+    assert curve.curve.getPath().elementCount() > 0
+    # extreme zoom-in between two samples: still rendered via clipToView
+    win._plot.set_x_range(0.4500001, 0.4500002)
+    app.processEvents()
     assert curve.curve.getPath().elementCount() > 0
 
 
@@ -507,3 +510,77 @@ def test_click_tooltip(win, app):
     win._plot._on_scene_clicked(FakeClick(vb.mapViewToScene(QPointF(0.45, 8.5))))
     app.processEvents()
     assert not win._plot._click_label.isVisible()
+
+
+def test_click_interpolation_mode(win, app):
+    win.resize(1200, 700)
+    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    app.processEvents()
+    win._plot.set_x_range(0.0, 0.9)
+    win._plot.set_y_range(0.0, 9.0)
+    app.processEvents()
+    vb = win._plot._plot_item.getViewBox()
+    # P1 is the straight line y = 10x
+    # OFF (default): clicking near a sample snaps to that original sample
+    win._plot._on_scene_clicked(
+        FakeClick(vb.mapViewToScene(QPointF(0.41, 4.1))))
+    app.processEvents()
+    assert win._plot._click_label.textItem.toPlainText() == "(0.4, 4)"
+    # OFF: clicking exactly on the curve but far (px) from any sample
+    # finds nothing (only original points are selectable)
+    mid_click = FakeClick(vb.mapViewToScene(QPointF(0.45, 4.5)))
+    win._plot._on_scene_clicked(mid_click)
+    app.processEvents()
+    assert not win._plot._click_label.isVisible()
+
+    # ON (via the menu checkbox, as the user would): interpolated point
+    win._cursor_menu._interp_check.setChecked(True)
+    app.processEvents()
+    assert win._plot._click_interpolate
+    win._plot._on_scene_clicked(mid_click)
+    app.processEvents()
+    assert win._plot._click_label.textItem.toPlainText() == "(0.45, 4.5)"
+
+    # clicking far away still dismisses
+    win._plot._on_scene_clicked(FakeClick(vb.mapViewToScene(QPointF(0.1, 8.5))))
+    app.processEvents()
+    assert not win._plot._click_label.isVisible()
+    win._cursor_menu._interp_check.setChecked(False)
+    app.processEvents()
+
+
+def test_goto_panel_fields_and_validation(win, app):
+    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    app.processEvents()
+    goto = win._goto
+    # default: vertical enabled, horizontal disabled — both always visible
+    assert goto._x_edit.isEnabled()
+    assert not goto._y_edit.isEnabled()
+    # valid X moves the vertical cursor
+    goto._x_edit.setText("0.3")
+    goto._on_go()
+    app.processEvents()
+    assert abs(win._plot._cursor.value() - 0.3) < 1e-9
+    # isHidden reflects the widget's own state even while the popup is
+    # closed (isVisible would be False regardless)
+    assert goto._error_label.isHidden()
+    # X out of range -> inline error, cursor unchanged
+    goto._x_edit.setText("50")
+    goto._on_go()
+    app.processEvents()
+    assert not goto._error_label.isHidden()
+    assert abs(win._plot._cursor.value() - 0.3) < 1e-9
+    # enable horizontal cursor -> Y field becomes enabled and works
+    win._cursor_menu._h_check.setChecked(True)
+    app.processEvents()
+    assert goto._y_edit.isEnabled()
+    goto._x_edit.setText("0.4")
+    goto._y_edit.setText("2.0")   # P1 spans 0..9
+    goto._on_go()
+    app.processEvents()
+    assert abs(win._plot._cursor.value() - 0.4) < 1e-9
+    assert abs(win._plot._hcursor.value() - 2.0) < 1e-9
+    # restore defaults
+    win._cursor_menu._h_check.setChecked(False)
+    app.processEvents()
+    assert not goto._y_edit.isEnabled()
