@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QLocale, Signal
 from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QWidget,
 )
+
+
+def _period_validator(parent: QWidget) -> QDoubleValidator:
+    """A double validator that accepts only '.' as the decimal separator,
+    so a comma keystroke is rejected. RejectGroupSeparator is required or
+    the C locale would treat ',' as a thousands separator (Intermediate)
+    instead of rejecting it."""
+    loc = QLocale(QLocale.Language.C)
+    loc.setNumberOptions(QLocale.NumberOption.RejectGroupSeparator)
+    v = QDoubleValidator(parent)
+    v.setNotation(QDoubleValidator.Notation.StandardNotation)
+    v.setLocale(loc)
+    return v
 
 
 class AxisPanel(QWidget):
@@ -36,7 +49,7 @@ class AxisPanel(QWidget):
                  ("Y mín", "ymin"), ("Y máx", "ymax")]):
             grid.addWidget(QLabel(label), row, 0)
             edit = QLineEdit()
-            edit.setValidator(QDoubleValidator())
+            edit.setValidator(_period_validator(edit))
             edit.returnPressed.connect(self._on_apply)
             self._fields[key] = edit
             grid.addWidget(edit, row, 1)
@@ -65,7 +78,7 @@ class AxisPanel(QWidget):
 
     def _on_apply(self) -> None:
         try:
-            vals = {k: float(e.text().replace(",", "."))
+            vals = {k: float(e.text().strip())
                     for k, e in self._fields.items()}
         except ValueError:
             self._flag(lambda k: self._not_float(self._fields[k].text()))
@@ -86,7 +99,7 @@ class AxisPanel(QWidget):
     @staticmethod
     def _not_float(text: str) -> bool:
         try:
-            float(text.replace(",", "."))
+            float(text.strip())
             return False
         except ValueError:
             return True

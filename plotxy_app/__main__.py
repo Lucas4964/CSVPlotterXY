@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from PySide6.QtCore import QLocale
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
@@ -11,6 +12,8 @@ from .main_window import MainWindow
 
 
 def main() -> int:
+    # period is the only decimal separator across the whole app
+    QLocale.setDefault(QLocale(QLocale.Language.C))
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))

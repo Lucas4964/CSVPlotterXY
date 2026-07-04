@@ -4,8 +4,9 @@ signal wiring and status bar."""
 from __future__ import annotations
 
 import os
+import time
 
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt
 from PySide6.QtWidgets import (
     QApplication, QFileDialog, QLabel, QMainWindow, QMessageBox,
     QPushButton, QSplitter, QToolBar,
@@ -113,6 +114,14 @@ class MainWindow(QMainWindow):
         self._goto.set_enabled_states(*self._cursor_menu.states())
         self._goto.goto_requested.connect(self._on_goto_requested)
 
+        # toolbar dropdowns work as toggles: a Qt.Popup closes on the
+        # press that lands on its own button, so an event filter records
+        # each hide time and the toggle handler skips the immediate reopen
+        self._popups = (self._axis, self._cursor_menu, self._goto)
+        self._popup_hidden_at: dict[int, float] = {}
+        for w in self._popups:
+            w.installEventFilter(self)
+
         # --- status bar
         self._status_info = QLabel("")
         self.statusBar().addWidget(self._status_info)
@@ -155,12 +164,9 @@ class MainWindow(QMainWindow):
                 + (f" (+{more})" if more > 0 else ""), 6000)
 
         if first_file:
-            # default: X = row index; pre-check a data column as Y (the
-            # second column when present, to avoid the trivial ramp when
-            # the first column is a time/index-like axis)
+            # default: X = row index, first data column pre-checked as Y
             x_fallback = SeriesRef("index", file_id, INDEX_NAME)
-            col = dataset.names[1] if dataset.n_cols > 1 else dataset.names[0]
-            initial_y = SeriesRef("column", file_id, col)
+            initial_y = SeriesRef("column", file_id, dataset.names[0])
             self._refresh_panel(x_fallback=x_fallback, pre_check=initial_y)
         else:
             self._refresh_panel()
@@ -293,20 +299,33 @@ class MainWindow(QMainWindow):
     def _plot_zoom_toggled(self, checked: bool) -> None:
         self._plot.set_zoom_visible(checked)
 
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Hide and obj in self._popups:
+            self._popup_hidden_at[id(obj)] = time.monotonic()
+        return super().eventFilter(obj, event)
+
+    def _toggle_popup(self, widget, button, prepare=None) -> None:
+        """Open the dropdown, or close it if this click just dismissed it
+        (or it is still visible) — a consistent toggle."""
+        if widget.isVisible():
+            widget.hide()
+            return
+        if time.monotonic() - self._popup_hidden_at.get(id(widget), 0.0) < 0.25:
+            return
+        if prepare is not None and prepare() is False:
+            return
+        pos = button.mapToGlobal(QPoint(0, button.height()))
+        widget.move(pos)
+        widget.show()
+        widget.raise_()
+
     def _open_axis_popup(self) -> None:
-        x0, x1, y0, y1 = self._plot.view_ranges()
-        self._axis.set_ranges(x0, x1, y0, y1)
-        pos = self._scale_btn.mapToGlobal(QPoint(0, self._scale_btn.height()))
-        self._axis.move(pos)
-        self._axis.show()
-        self._axis.raise_()
+        def prepare():
+            self._axis.set_ranges(*self._plot.view_ranges())
+        self._toggle_popup(self._axis, self._scale_btn, prepare)
 
     def _open_cursor_popup(self) -> None:
-        pos = self._cursors_btn.mapToGlobal(
-            QPoint(0, self._cursors_btn.height()))
-        self._cursor_menu.move(pos)
-        self._cursor_menu.show()
-        self._cursor_menu.raise_()
+        self._toggle_popup(self._cursor_menu, self._cursors_btn)
 
     def _on_cursors_changed(self, vertical: bool, horizontal: bool) -> None:
         # panels first, so the plot's re-emit isn't dropped by the
@@ -322,17 +341,15 @@ class MainWindow(QMainWindow):
         self._plot.set_manual_ranges(xmin, xmax, ymin, ymax)
 
     def _open_goto_popup(self) -> None:
-        if self._plot.x_range() is None:
-            QMessageBox.information(
-                self, "Ir para", "Plote uma série primeiro.")
-            return
-        cx, cy = self._plot.cursor_positions()
-        self._goto.set_positions(cx, cy)
-        self._goto.clear_error()
-        pos = self._goto_btn.mapToGlobal(QPoint(0, self._goto_btn.height()))
-        self._goto.move(pos)
-        self._goto.show()
-        self._goto.raise_()
+        def prepare():
+            if self._plot.x_range() is None:
+                QMessageBox.information(
+                    self, "Ir para", "Plote uma série primeiro.")
+                return False
+            cx, cy = self._plot.cursor_positions()
+            self._goto.set_positions(cx, cy)
+            self._goto.clear_error()
+        self._toggle_popup(self._goto, self._goto_btn, prepare)
 
     def _on_goto_requested(self, x, y) -> None:
         # validate both enabled fields against the data ranges before
@@ -361,7 +378,7 @@ class MainWindow(QMainWindow):
             self._plot.set_cursor_y(y)
             moved.append(f"Y = {y:.6g}")
         if moved:
-            self._goto.hide()
+            # keep the popup open so the other cursor can also be moved
             self.statusBar().showMessage(
                 "Cursor posicionado em " + ", ".join(moved), 4000)
 

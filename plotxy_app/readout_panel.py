@@ -13,9 +13,17 @@ import math
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QHeaderView, QLabel, QStyledItemDelegate, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QApplication, QHeaderView, QLabel, QMenu, QStyledItemDelegate, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
 
 _KEY_ROLE = Qt.ItemDataRole.UserRole
 _COLOR_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -65,6 +73,9 @@ class CursorReadout(QWidget):
 
         self._header = QLabel(title)
         self._header.setStyleSheet("font-weight: bold;")
+        self._header.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self._header.customContextMenuRequested.connect(self._on_header_menu)
         layout.addWidget(self._header)
 
         self._tree = QTreeWidget()
@@ -80,6 +91,9 @@ class CursorReadout(QWidget):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._tree.itemClicked.connect(self._on_item_clicked)
+        self._tree.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_tree_menu)
         layout.addWidget(self._tree, stretch=1)
 
     def update_values(self, coord: float,
@@ -122,3 +136,40 @@ class CursorReadout(QWidget):
         key = item.data(0, _KEY_ROLE)
         if key:
             self.color_change_requested.emit(key)
+
+    # ---------------------------------------------------- copy to clipboard
+
+    @staticmethod
+    def _copy(text: str) -> None:
+        QApplication.clipboard().setText(text)
+
+    def _on_tree_menu(self, pos) -> None:
+        item = self._tree.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu(self)
+        if item.childCount() > 0:
+            values = [item.child(i).text(2)
+                      for i in range(item.childCount())
+                      if _is_number(item.child(i).text(2))]
+            if not values:
+                return
+            menu.addAction("Copiar valores").triggered.connect(
+                lambda: self._copy("\n".join(values)))
+        elif _is_number(item.text(2)):
+            value = item.text(2)
+            menu.addAction("Copiar valor").triggered.connect(
+                lambda: self._copy(value))
+        else:
+            return
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _on_header_menu(self, pos) -> None:
+        text = self._header.text()
+        if "=" not in text:
+            return
+        value = text.split("=", 1)[1].strip()
+        menu = QMenu(self)
+        menu.addAction("Copiar valor").triggered.connect(
+            lambda: self._copy(value))
+        menu.exec(self._header.mapToGlobal(pos))

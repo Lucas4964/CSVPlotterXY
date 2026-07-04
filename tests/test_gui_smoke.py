@@ -82,9 +82,10 @@ def test_two_files_tree_and_labels(win, app):
     labels = [win._panel._x_combo.itemText(i)
               for i in range(win._panel._x_combo.count())]
     assert "time (a.csv)" in labels and "time (b.csv)" in labels
-    # default selection survived the second file load: X=index(a), P1 checked
+    # default selection survived the second file load: X=index(a), first
+    # data column (time) checked as Y
     assert win._panel.x_ref() == SeriesRef("index", f1, INDEX_NAME)
-    assert win._panel.y_refs() == [SeriesRef("column", f1, "P1")]
+    assert win._panel.y_refs() == [SeriesRef("column", f1, "time")]
     assert len(win._plot._curves) == 1
 
 
@@ -301,7 +302,9 @@ def test_manual_ranges_override_data_limits(win, app):
 
 
 def test_unlimited_zoom_keeps_curve(win, app):
-    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
     app.processEvents()
     curve = next(iter(win._plot._curves.values()))
     # extreme zoom-out: view honors the request exactly (no clamping) and
@@ -330,7 +333,11 @@ def test_goto_x_api_and_validation(win, app):
 
 
 def test_set_curve_color_persists_across_theme(win, app):
-    key = next(iter(win._plot._curves))
+    # use P1 explicitly so the test doesn't depend on the default Y column
+    ref = SeriesRef("column", file_ids(win)[0], "P1")
+    win._panel.check_ref(ref)
+    app.processEvents()
+    key = ref.key()
     win._plot.set_curve_color(key, "#ff0000")
     app.processEvents()
     assert win._plot._color_of[key] == "#ff0000"
@@ -342,7 +349,6 @@ def test_set_curve_color_persists_across_theme(win, app):
     assert win._plot._color_of[key] == "#ff0000"
     assert win._plot._curves[key].opts["pen"].color().name() == "#ff0000"
     # and survives unchecking + rechecking the series (same key)
-    ref = SeriesRef("column", file_ids(win)[0], "P1")
     item = find_item(win, ref)
     item.setCheckState(Qt.CheckState.Unchecked)
     app.processEvents()
@@ -472,6 +478,85 @@ def test_cursor_menu_defaults_and_toggle(win, app):
     app.processEvents()
 
 
+def test_decimal_validators_reject_comma(app):
+    from PySide6.QtGui import QValidator
+    from plotxy_app.axis_panel import AxisPanel
+    from plotxy_app.goto_panel import GotoPanel
+    ap = AxisPanel()
+    gp = GotoPanel()
+    edits = list(ap._fields.values()) + [gp._x_edit, gp._y_edit]
+    for edit in edits:
+        v = edit.validator()
+        assert v is not None
+        assert v.validate("1.5", 3)[0] == QValidator.State.Acceptable
+        assert v.validate("1,5", 3)[0] == QValidator.State.Invalid
+
+
+def test_default_y_is_first_column(app, tmp_path):
+    p = tmp_path / "three.csv"
+    p.write_text('"t","a","b"\n' + "\n".join(
+        f"{i},{i * 2},{i * 3}" for i in range(5)))
+    w = MainWindow()
+    w.show()
+    w.open_path(str(p))
+    app.processEvents()
+    fid = w._project.files()[0][0]
+    assert w._panel.x_ref() == SeriesRef("index", fid, INDEX_NAME)
+    assert w._panel.y_refs() == [SeriesRef("column", fid, "t")]  # first column
+
+
+def test_readout_copy_value(app):
+    from plotxy_app.readout_panel import CursorReadout
+    from PySide6.QtWidgets import QApplication
+    panel = CursorReadout("Cursor vertical", "X", "Y")
+    panel.show()
+    app.processEvents()
+    panel.update_values(1.23, [
+        ("column|f1|P1", "P1", "#ff0000", [4.5]),
+        ("column|f1|P2", "P2", "#00ff00", [1.0, 2.0]),
+    ])
+    app.processEvents()
+    tree = panel._tree
+    # single value -> "Copiar valor"
+    top0 = tree.topLevelItem(0)
+    QApplication.clipboard().clear()
+    # invoke the copy directly (context menu exec would block)
+    panel._copy(top0.text(2))
+    assert QApplication.clipboard().text() == "4.5"
+    # grouped values -> join children
+    top1 = tree.topLevelItem(1)
+    vals = "\n".join(top1.child(i).text(2) for i in range(top1.childCount()))
+    panel._copy(vals)
+    assert QApplication.clipboard().text() == "1\n2"
+    # header coordinate is copyable too
+    panel._copy(panel._header.text().split("=", 1)[1].strip())
+    assert QApplication.clipboard().text() == "1.23"
+    panel.hide()
+
+
+def test_toolbar_popup_toggle(win, app):
+    import time as _time
+    # closed -> opens
+    win._open_cursor_popup()
+    app.processEvents()
+    assert win._cursor_menu.isVisible()
+    # visible -> closes
+    win._open_cursor_popup()
+    app.processEvents()
+    assert not win._cursor_menu.isVisible()
+    # a click immediately after the popup auto-closed must NOT reopen it
+    win._popup_hidden_at[id(win._cursor_menu)] = _time.monotonic()
+    win._open_cursor_popup()
+    app.processEvents()
+    assert not win._cursor_menu.isVisible()
+    # once the guard window passes, it opens again
+    win._popup_hidden_at[id(win._cursor_menu)] = _time.monotonic() - 1.0
+    win._open_cursor_popup()
+    app.processEvents()
+    assert win._cursor_menu.isVisible()
+    win._cursor_menu.hide()
+
+
 def test_axis_popup_wiring(win, app):
     win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
     app.processEvents()
@@ -495,7 +580,9 @@ def test_axis_popup_wiring(win, app):
 
 def test_click_tooltip(win, app):
     win.resize(1200, 700)
-    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
     app.processEvents()
     win._plot.set_x_range(0.0, 0.9)
     win._plot.set_y_range(0.0, 9.0)
@@ -514,7 +601,9 @@ def test_click_tooltip(win, app):
 
 def test_click_interpolation_mode(win, app):
     win.resize(1200, 700)
-    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
     app.processEvents()
     win._plot.set_x_range(0.0, 0.9)
     win._plot.set_y_range(0.0, 9.0)
@@ -550,37 +639,40 @@ def test_click_interpolation_mode(win, app):
 
 
 def test_goto_panel_fields_and_validation(win, app):
-    win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
     app.processEvents()
     goto = win._goto
-    # default: vertical enabled, horizontal disabled — both always visible
-    assert goto._x_edit.isEnabled()
-    assert not goto._y_edit.isEnabled()
-    # valid X moves the vertical cursor
+    # default: vertical enabled, horizontal disabled — field AND button,
+    # both always visible
+    assert goto._x_edit.isEnabled() and goto._go_x_btn.isEnabled()
+    assert not goto._y_edit.isEnabled() and not goto._go_y_btn.isEnabled()
+    # "Ir para X" moves only the vertical cursor
+    win._plot.set_cursor_y(1.0)
     goto._x_edit.setText("0.3")
-    goto._on_go()
+    goto._on_go_x()
     app.processEvents()
     assert abs(win._plot._cursor.value() - 0.3) < 1e-9
-    # isHidden reflects the widget's own state even while the popup is
-    # closed (isVisible would be False regardless)
+    assert abs(win._plot._hcursor.value() - 1.0) < 1e-9  # Y untouched
     assert goto._error_label.isHidden()
     # X out of range -> inline error, cursor unchanged
     goto._x_edit.setText("50")
-    goto._on_go()
+    goto._on_go_x()
     app.processEvents()
     assert not goto._error_label.isHidden()
     assert abs(win._plot._cursor.value() - 0.3) < 1e-9
-    # enable horizontal cursor -> Y field becomes enabled and works
+    # enable horizontal cursor -> Y field + button become enabled
     win._cursor_menu._h_check.setChecked(True)
     app.processEvents()
-    assert goto._y_edit.isEnabled()
-    goto._x_edit.setText("0.4")
+    assert goto._y_edit.isEnabled() and goto._go_y_btn.isEnabled()
+    # "Ir para Y" moves only the horizontal cursor (X untouched)
     goto._y_edit.setText("2.0")   # P1 spans 0..9
-    goto._on_go()
+    goto._on_go_y()
     app.processEvents()
-    assert abs(win._plot._cursor.value() - 0.4) < 1e-9
     assert abs(win._plot._hcursor.value() - 2.0) < 1e-9
+    assert abs(win._plot._cursor.value() - 0.3) < 1e-9
     # restore defaults
     win._cursor_menu._h_check.setChecked(False)
     app.processEvents()
-    assert not goto._y_edit.isEnabled()
+    assert not goto._y_edit.isEnabled() and not goto._go_y_btn.isEnabled()
