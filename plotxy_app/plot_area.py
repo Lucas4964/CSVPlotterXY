@@ -84,7 +84,7 @@ class PlotArea(QWidget):
         self._theme: Theme | None = None
         self._v_enabled = True   # vertical cursor shown by default
         self._h_enabled = False  # horizontal cursor off by default
-        self._click_interpolate = False  # click-tooltip snaps to samples
+        self._click_interpolate = True   # click-tooltip: interpolate by default
         self._snap_to_samples = False    # restrict cursor motion to samples
         self._measure_positioned = False  # measures region placed once, persists
         self._y_bounds: tuple[float, float] | None = None
@@ -101,6 +101,14 @@ class PlotArea(QWidget):
         self._plot_item = self._pw.getPlotItem()
         self._plot_item.showGrid(x=True, y=True, alpha=0.15)
         self._legend = self._plot_item.addLegend(offset=(10, 10))
+
+        # origin reference lines (x=0, y=0), Desmos-style: subtly bolder
+        # than the grid, always behind the data curves
+        self._origin_v = pg.InfiniteLine(pos=0, angle=90, movable=False)
+        self._origin_h = pg.InfiniteLine(pos=0, angle=0, movable=False)
+        for line in (self._origin_v, self._origin_h):
+            line.setZValue(-10)
+            self._pw.addItem(line)
 
         self._cursor = pg.InfiniteLine(angle=90, movable=True)
         self._cursor.setZValue(90)
@@ -157,6 +165,11 @@ class PlotArea(QWidget):
         self._zoom_pw = pg.PlotWidget()
         self._zoom_item = self._zoom_pw.getPlotItem()
         self._zoom_item.showGrid(x=True, y=True, alpha=0.15)
+        self._zoom_origin_v = pg.InfiniteLine(pos=0, angle=90, movable=False)
+        self._zoom_origin_h = pg.InfiniteLine(pos=0, angle=0, movable=False)
+        for line in (self._zoom_origin_v, self._zoom_origin_h):
+            line.setZValue(-10)
+            self._zoom_pw.addItem(line)
         zoom_vb = self._zoom_item.getViewBox()
         zoom_vb.setMouseEnabled(x=True, y=False)
         zoom_vb.enableAutoRange(y=True)
@@ -377,6 +390,16 @@ class PlotArea(QWidget):
                 ax.setPen(pg.mkPen(theme.axis_color))
                 ax.setTextPen(pg.mkPen(theme.axis_color))
             item.showGrid(x=True, y=True, alpha=theme.grid_alpha)
+
+        # origin lines (x=0, y=0): same hue as the grid/axes, but bolder
+        # and more opaque so the quadrant reference stands out subtly
+        origin_color = QColor(theme.axis_color)
+        origin_color.setAlpha(140)
+        origin_pen = pg.mkPen(origin_color, width=1.2)
+        for line in (self._origin_v, self._origin_h,
+                    self._zoom_origin_v, self._zoom_origin_h):
+            line.setPen(origin_pen)
+
         self._legend.setLabelTextColor(theme.text)
         # setLabelTextColor only updates the label's color option; the HTML
         # is re-rendered (picking up the new color) only on setText, so

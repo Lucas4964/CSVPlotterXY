@@ -49,7 +49,7 @@ class CursorMenu(QWidget):
         sel_inner = QVBoxLayout(sel_box)
         sel_inner.setContentsMargins(8, 8, 8, 8)
         self._interp_check = QCheckBox("Interpolar ao clicar na curva")
-        self._interp_check.setChecked(False)
+        self._interp_check.setChecked(True)
         self._interp_check.setToolTip(
             "Desligado: o clique seleciona o ponto original mais próximo.\n"
             "Ligado: o clique seleciona o ponto interpolado sobre a curva.")

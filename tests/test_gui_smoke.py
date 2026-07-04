@@ -803,31 +803,37 @@ def test_click_interpolation_mode(win, app):
     app.processEvents()
     vb = win._plot._plot_item.getViewBox()
     # P1 is the straight line y = 10x
-    # OFF (default): clicking near a sample snaps to that original sample
+    mid_click = FakeClick(vb.mapViewToScene(QPointF(0.45, 4.5)))
+
+    # ON (default): clicking exactly on the curve, far (px) from any
+    # sample, shows the interpolated point
+    assert win._cursor_menu._interp_check.isChecked()
+    assert win._plot._click_interpolate
+    win._plot._on_scene_clicked(mid_click)
+    app.processEvents()
+    assert win._plot._click_label.textItem.toPlainText() == "(0.45, 4.5)"
+
+    # OFF (via the menu checkbox, as the user would): snaps to the nearest
+    # original sample instead
+    win._cursor_menu._interp_check.setChecked(False)
+    app.processEvents()
+    assert not win._plot._click_interpolate
     win._plot._on_scene_clicked(
         FakeClick(vb.mapViewToScene(QPointF(0.41, 4.1))))
     app.processEvents()
     assert win._plot._click_label.textItem.toPlainText() == "(0.4, 4)"
     # OFF: clicking exactly on the curve but far (px) from any sample
     # finds nothing (only original points are selectable)
-    mid_click = FakeClick(vb.mapViewToScene(QPointF(0.45, 4.5)))
     win._plot._on_scene_clicked(mid_click)
     app.processEvents()
     assert not win._plot._click_label.isVisible()
-
-    # ON (via the menu checkbox, as the user would): interpolated point
-    win._cursor_menu._interp_check.setChecked(True)
-    app.processEvents()
-    assert win._plot._click_interpolate
-    win._plot._on_scene_clicked(mid_click)
-    app.processEvents()
-    assert win._plot._click_label.textItem.toPlainText() == "(0.45, 4.5)"
 
     # clicking far away still dismisses
     win._plot._on_scene_clicked(FakeClick(vb.mapViewToScene(QPointF(0.1, 8.5))))
     app.processEvents()
     assert not win._plot._click_label.isVisible()
-    win._cursor_menu._interp_check.setChecked(False)
+    # restore default for other tests
+    win._cursor_menu._interp_check.setChecked(True)
     app.processEvents()
 
 
