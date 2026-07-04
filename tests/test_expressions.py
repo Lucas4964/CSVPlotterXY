@@ -51,6 +51,46 @@ def test_sqrt():
     assert collect_series_names("sqrt(A) + B") == {"A", "B"}
 
 
+def test_derivative_operator():
+    X = np.array([0.0, 1.0, 2.0, 3.0])  # uniform spacing
+    vals, names, _ = evaluate("D(A)", resolver, x=X)
+    assert np.allclose(vals, np.gradient(A, X))
+    assert names == {"A"}
+    # non-uniform X
+    Xnu = np.array([0.0, 0.5, 2.0, 5.0])
+    vals, _, _ = evaluate("D(A)", resolver, x=Xnu)
+    assert np.allclose(vals, np.gradient(A, Xnu))
+    # derivative of a sub-expression
+    vals, _, _ = evaluate("D(2 * A)", resolver, x=X)
+    assert np.allclose(vals, np.gradient(2 * A, X))
+    # D is a known function now
+    assert collect_series_names("D(A) + B") == {"A", "B"}
+    assert "D" in _known_from_error()
+
+
+def _known_from_error():
+    try:
+        collect_series_names("nope_func(A)")
+    except ExpressionError as e:
+        return str(e)
+    return ""
+
+
+def test_derivative_errors():
+    X = np.array([0.0, 1.0, 2.0, 3.0])
+    # missing X axis
+    with pytest.raises(ExpressionError, match="eixo X"):
+        evaluate("D(A)", resolver)
+    # wrong arity
+    with pytest.raises(ExpressionError, match="1 argumento"):
+        evaluate("D(A, B)", resolver, x=X)
+    # X and series of different lengths -> truncated together
+    Xlong = np.array([0.0, 1.0])
+    vals, _, truncated = evaluate("D(A)", resolver, x=Xlong)
+    assert truncated
+    assert np.allclose(vals, np.gradient(A[:2], Xlong))
+
+
 def test_string_reference():
     vals, names, _ = ev('"der(v)" + 1')
     assert np.allclose(vals, WEIRD + 1)

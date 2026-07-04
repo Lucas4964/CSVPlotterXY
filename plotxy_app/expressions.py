@@ -26,6 +26,14 @@ FUNCTIONS: dict[str, Callable] = {
     # futuras: "sin": np.sin, "cos": np.cos, "log": np.log, ...
 }
 
+# X-aware functions handled specially by the evaluator (not pointwise).
+# D(series) = derivative of the series with respect to the X axis.
+_X_FUNCS = {"D"}
+
+
+def _known_functions() -> str:
+    return ", ".join(sorted(set(FUNCTIONS) | _X_FUNCS))
+
 _BINOPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -65,15 +73,19 @@ def _validate_and_collect(node: ast.AST, names: set[str]) -> None:
                 f"Operador não suportado: {type(node.op).__name__}")
         _validate_and_collect(node.operand, names)
     elif isinstance(node, ast.Call):
-        if not isinstance(node.func, ast.Name) or node.func.id not in FUNCTIONS:
+        is_known = (isinstance(node.func, ast.Name)
+                    and (node.func.id in FUNCTIONS or node.func.id in _X_FUNCS))
+        if not is_known:
             fname = (node.func.id if isinstance(node.func, ast.Name)
                      else ast.dump(node.func))
-            available = ", ".join(sorted(FUNCTIONS))
             raise ExpressionError(
-                f"Função desconhecida: {fname}. Disponíveis: {available}")
+                f"Função desconhecida: {fname}. Disponíveis: {_known_functions()}")
         if node.keywords:
             raise ExpressionError(
                 "Argumentos nomeados não são suportados em funções.")
+        if node.func.id in _X_FUNCS and len(node.args) != 1:
+            raise ExpressionError(
+                f"{node.func.id}() espera exatamente 1 argumento.")
         for arg in node.args:
             _validate_and_collect(arg, names)
     elif isinstance(node, ast.Name):
@@ -99,16 +111,24 @@ def collect_series_names(expr: str) -> set[str]:
     return names
 
 
-def _eval_node(node: ast.AST, series: dict[str, np.ndarray]):
+def _eval_node(node: ast.AST, series: dict[str, np.ndarray],
+               x: np.ndarray | None):
     if isinstance(node, ast.Expression):
-        return _eval_node(node.body, series)
+        return _eval_node(node.body, series, x)
     if isinstance(node, ast.BinOp):
         return _BINOPS[type(node.op)](
-            _eval_node(node.left, series), _eval_node(node.right, series))
+            _eval_node(node.left, series, x), _eval_node(node.right, series, x))
     if isinstance(node, ast.UnaryOp):
-        return _UNARYOPS[type(node.op)](_eval_node(node.operand, series))
+        return _UNARYOPS[type(node.op)](_eval_node(node.operand, series, x))
     if isinstance(node, ast.Call):
-        args = [_eval_node(a, series) for a in node.args]
+        if node.func.id == "D":
+            if x is None:
+                raise ExpressionError("D() requer um eixo X selecionado.")
+            if len(x) < 2:
+                raise ExpressionError("Série curta demais para D().")
+            y = np.asarray(_eval_node(node.args[0], series, x), dtype=np.float64)
+            return np.gradient(y, x)
+        args = [_eval_node(a, series, x) for a in node.args]
         return FUNCTIONS[node.func.id](*args)
     if isinstance(node, ast.Name):
         return series[node.id]
@@ -120,13 +140,15 @@ def _eval_node(node: ast.AST, series: dict[str, np.ndarray]):
 
 
 def evaluate(expr: str, resolver: Callable[[str], np.ndarray],
+             x: np.ndarray | None = None,
              ) -> tuple[np.ndarray, set[str], bool]:
     """Evaluate `expr`, resolving series names through `resolver`.
 
-    Returns (values, used_names, truncated). Arrays of different
-    lengths are paired index-wise and truncated to the shortest one.
-    Division by zero / overflow produce inf/nan, which downstream code
-    renders as gaps.
+    `x` is the X-axis array, needed by the D() derivative operator; it is
+    truncated together with the referenced series. Returns (values,
+    used_names, truncated). Arrays of different lengths are paired
+    index-wise and truncated to the shortest one. Division by zero /
+    overflow produce inf/nan, which downstream code renders as gaps.
     """
     tree = _parse(expr)
     names: set[str] = set()
@@ -142,12 +164,17 @@ def evaluate(expr: str, resolver: Callable[[str], np.ndarray],
         except KeyError:
             raise ExpressionError(f'Série não encontrada: "{name}"') from None
 
-    min_len = min(len(a) for a in arrays.values())
-    truncated = any(len(a) > min_len for a in arrays.values())
+    lengths = [len(a) for a in arrays.values()]
+    if x is not None:
+        x = np.asarray(x, dtype=np.float64)
+        lengths.append(len(x))
+    min_len = min(lengths)
+    truncated = any(ln > min_len for ln in lengths)
     series = {n: a[:min_len] for n, a in arrays.items()}
+    x_trunc = x[:min_len] if x is not None else None
 
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        result = _eval_node(tree, series)
+        result = _eval_node(tree, series, x_trunc)
 
     values = np.asarray(result, dtype=np.float64)
     if values.ndim != 1:

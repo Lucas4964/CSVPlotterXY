@@ -15,6 +15,7 @@ class CursorMenu(QWidget):
 
     cursors_changed = Signal(bool, bool)
     interpolation_changed = Signal(bool)
+    snap_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -33,6 +34,14 @@ class CursorMenu(QWidget):
         for check in (self._v_check, self._h_check):
             check.toggled.connect(self._emit)
             inner.addWidget(check)
+
+        self._snap_check = QCheckBox("Restringir cursores a pontos originais")
+        self._snap_check.setChecked(False)
+        self._snap_check.setToolTip(
+            "Os dois cursores passam a se mover apenas sobre os valores "
+            "amostrados da série (ponto original mais próximo).")
+        self._snap_check.toggled.connect(self.snap_changed)
+        inner.addWidget(self._snap_check)
 
         layout.addWidget(box)
 

@@ -58,6 +58,20 @@ class Project:
         self._custom: dict[str, CustomSeries] = {}
         self._index_cache: dict[str, np.ndarray] = {}
         self._next_id = 1
+        self._x_ref: SeriesRef | None = None  # current X axis, for D()
+
+    def set_x_axis(self, ref: SeriesRef | None) -> None:
+        """Record the current X-axis selection so the D() operator can
+        snapshot it when a custom series is created."""
+        self._x_ref = ref
+
+    def x_values(self) -> np.ndarray | None:
+        if self._x_ref is None:
+            return None
+        try:
+            return self.values(self._x_ref)
+        except (KeyError, IndexError):
+            return None
 
     # -------------------------------------------------------------- files
 
@@ -269,7 +283,7 @@ class Project:
 
         try:
             values, used_names, truncated = expressions.evaluate(
-                expression, resolver)
+                expression, resolver, x=self.x_values())
         except expressions.ExpressionError as e:
             raise ProjectError(str(e)) from e
 

@@ -37,6 +37,7 @@ class SeriesDialog(QDialog):
         layout.addWidget(self._expr_edit)
 
         hint = QLabel("Operações: +  −  *  /  **  abs()  sqrt()  parênteses.\n"
+                      "D(série) = derivada em relação ao eixo X atual.\n"
                       "Duplo clique numa série abaixo insere o nome na "
                       "expressão (aspas automáticas quando necessário).")
         hint.setWordWrap(True)
@@ -102,7 +103,8 @@ class SeriesDialog(QDialog):
             self._project.check_custom(name, expr, ignore=ignore)
             # dry-run the evaluation too (checks unknown series etc.)
             expressions.evaluate(
-                expr, lambda n: self._project.values(self._project.ref_by_name(n)))
+                expr, lambda n: self._project.values(self._project.ref_by_name(n)),
+                x=self._project.x_values())
         except (ProjectError, expressions.ExpressionError) as e:
             self._error_label.setText(str(e))
             self._error_label.show()

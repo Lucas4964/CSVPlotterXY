@@ -151,3 +151,21 @@ def test_qualified_names_in_expressions(proj):
     assert len(cs.values) == 4
     with pytest.raises(ProjectError, match="ambíguo"):
         proj.add_custom("ruim", "time * 2")
+
+
+def test_derivative_snapshots_x_axis(proj):
+    f1 = proj.add_file(make_ds(["time", "P1"], 5, "a.csv"))
+    time = proj.values(SeriesRef("column", f1, "time"))
+    p1 = proj.values(SeriesRef("column", f1, "P1"))
+    # D() uses the X axis current at creation time (time)
+    proj.set_x_axis(SeriesRef("column", f1, "time"))
+    cs, _ = proj.add_custom("dP1", "D(P1)")
+    assert np.allclose(cs.values, np.gradient(p1, time))
+    # snapshot: switching the X axis afterwards does NOT recompute it
+    proj.set_x_axis(SeriesRef("index", f1, INDEX_NAME))
+    assert np.allclose(proj.values(SeriesRef("custom", "", "dP1")),
+                       np.gradient(p1, time))
+    # without an X axis, D() is rejected at creation
+    proj.set_x_axis(None)
+    with pytest.raises(ProjectError, match="eixo X"):
+        proj.add_custom("bad", "D(P1)")

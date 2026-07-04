@@ -478,6 +478,71 @@ def test_cursor_menu_defaults_and_toggle(win, app):
     app.processEvents()
 
 
+def test_cursor_snap_to_samples(app):
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.show()
+    app.processEvents()
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y = np.array([0.0, 10.0, 20.0, 30.0, 40.0])
+    pa.set_series("k", "x", x, [("s", "s", y)])
+    pa.set_cursor_visible("h", True)
+    app.processEvents()
+
+    # free movement (default): value kept as-is
+    pa._cursor.setValue(1.4)
+    app.processEvents()
+    assert abs(pa._cursor.value() - 1.4) < 1e-9
+
+    # snapping on: vertical cursor jumps to the nearest X sample
+    pa.set_cursor_snap(True)
+    pa._cursor.setValue(1.4)
+    app.processEvents()
+    assert abs(pa._cursor.value() - 1.0) < 1e-9
+    pa._cursor.setValue(1.6)
+    app.processEvents()
+    assert abs(pa._cursor.value() - 2.0) < 1e-9
+    # horizontal cursor snaps to the nearest Y sample
+    pa._hcursor.setValue(22.0)
+    app.processEvents()
+    assert abs(pa._hcursor.value() - 20.0) < 1e-9
+
+    # snapping off again restores free movement
+    pa.set_cursor_snap(False)
+    pa._cursor.setValue(1.4)
+    app.processEvents()
+    assert abs(pa._cursor.value() - 1.4) < 1e-9
+    pa.hide()
+
+
+def test_cursor_menu_snap_signal(win, app):
+    assert not win._plot._snap_to_samples
+    win._cursor_menu._snap_check.setChecked(True)
+    app.processEvents()
+    assert win._plot._snap_to_samples
+    win._cursor_menu._snap_check.setChecked(False)
+    app.processEvents()
+    assert not win._plot._snap_to_samples
+
+
+def test_derivative_custom_series_integration(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    app.processEvents()
+    # with X = time selected, D() snapshots time
+    _, truncated = win._project.add_custom("dP1", "D(P1)")
+    assert not truncated
+    win._refresh_panel()
+    win._panel.check_ref(SeriesRef("custom", "", "dP1"))
+    app.processEvents()
+    import numpy as _np
+    t = _np.arange(10) * 0.1     # csv_a time column
+    p1 = _np.arange(10, dtype=float)  # P1 = i
+    assert _np.allclose(
+        win._project.values(SeriesRef("custom", "", "dP1")),
+        _np.gradient(p1, t))
+
+
 def test_decimal_validators_reject_comma(app):
     from PySide6.QtGui import QValidator
     from plotxy_app.axis_panel import AxisPanel

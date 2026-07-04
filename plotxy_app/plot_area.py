@@ -83,6 +83,7 @@ class PlotArea(QWidget):
         self._v_enabled = True   # vertical cursor shown by default
         self._h_enabled = False  # horizontal cursor off by default
         self._click_interpolate = False  # click-tooltip snaps to samples
+        self._snap_to_samples = False    # restrict cursor motion to samples
         self._y_bounds: tuple[float, float] | None = None
         self._syncing = False  # guard: region <-> zoom-panel feedback loop
 
@@ -557,12 +558,40 @@ class PlotArea(QWidget):
                             else "#000000", width=1),
         }
 
+    def set_cursor_snap(self, enabled: bool) -> None:
+        """When enabled, both cursors move only onto original sample
+        values (nearest-sample snapping)."""
+        self._snap_to_samples = enabled
+        self._on_v_cursor_moved()
+        self._on_h_cursor_moved()
+
+    def _y_samples(self) -> np.ndarray | None:
+        finite = [y[np.isfinite(y)] for y in self._ys.values()
+                  if np.any(np.isfinite(y))]
+        return np.concatenate(finite) if finite else None
+
+    def _maybe_snap(self, line: pg.InfiniteLine,
+                    samples: np.ndarray | None) -> float:
+        """Return the cursor value, snapped to the nearest sample when
+        snapping is on. Updates the line without re-triggering its signal."""
+        value = float(line.value())
+        if not self._snap_to_samples or samples is None or len(samples) == 0:
+            return value
+        with np.errstate(invalid="ignore"):
+            idx = int(np.nanargmin(np.abs(samples - value)))
+        snapped = float(samples[idx])
+        if snapped != value:
+            line.blockSignals(True)
+            line.setValue(snapped)
+            line.blockSignals(False)
+        return snapped
+
     def _on_v_cursor_moved(self) -> None:
         if self._x is None or not self._curves or not self._v_enabled:
             self._markers.setData([])
             self.v_cursor_moved.emit(float("nan"), [])
             return
-        cx = float(self._cursor.value())
+        cx = self._maybe_snap(self._cursor, self._x)
         spots, rows = [], []
         if self._x_kind != _NON_MONOTONIC:
             # fast path: single interpolated value per series
@@ -590,7 +619,7 @@ class PlotArea(QWidget):
             self._h_markers.setData([])
             self.h_cursor_moved.emit(float("nan"), [])
             return
-        cy = float(self._hcursor.value())
+        cy = self._maybe_snap(self._hcursor, self._y_samples())
         spots, rows = [], []
         for key in self._curves:
             color = self._color_of[key]

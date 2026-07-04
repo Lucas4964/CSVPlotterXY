@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
         self._h_readout.color_change_requested.connect(self._plot.prompt_color)
         self._cursor_menu.interpolation_changed.connect(
             self._plot.set_click_interpolation)
+        self._cursor_menu.snap_changed.connect(self._plot.set_cursor_snap)
         self._axis.range_changed.connect(self._on_axis_range_changed)
         self._axis.auto_requested.connect(lambda: self._plot.autorange())
         self._plot.view_range_changed.connect(self._axis.set_ranges)
@@ -215,6 +216,8 @@ class MainWindow(QMainWindow):
             self.open_path(path)
 
     def _on_selection_changed(self, x_ref, y_refs: list) -> None:
+        # keep the project's X axis current so D() snapshots the right axis
+        self._project.set_x_axis(x_ref)
         if x_ref is None or not self._project.files():
             self._plot.clear()
             return
