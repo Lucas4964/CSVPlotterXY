@@ -122,10 +122,10 @@ def test_custom_series_flow(win, app):
     app.processEvents()
     win._plot._cursor.setValue(0.45)
     app.processEvents()
-    # columns: [swatch | Série | Valor]
-    rows = {win._readout._table.item(r, 1).text():
-            win._readout._table.item(r, 2).text()
-            for r in range(win._readout._table.rowCount())}
+    # readout tree: one top-level row per series [swatch | Série | Valor]
+    tree = win._v_readout._tree
+    rows = {tree.topLevelItem(i).text(1): tree.topLevelItem(i).text(2)
+            for i in range(tree.topLevelItemCount())}
     t = np.arange(10) * 0.1
     expected = float(np.interp(0.45, t, np.arange(10) * 3.0))
     assert abs(float(rows["total"]) - expected) < 1e-4
@@ -351,24 +351,122 @@ def test_set_curve_color_persists_across_theme(win, app):
 def test_readout_swatch_click_requests_color(app):
     # standalone panel so the click doesn't trigger the real (modal)
     # color dialog wired up in MainWindow
-    from plotxy_app.readout_panel import ReadoutPanel, _KEY_ROLE
-    panel = ReadoutPanel()
+    from plotxy_app.readout_panel import CursorReadout, _KEY_ROLE
+    panel = CursorReadout("Cursor vertical", "X", "Y")
     panel.show()
     app.processEvents()
-    rows = [("column|f1|P1", "P1", "#ff0000", 1.5),
-            ("column|f1|P2", "P2", "#00ff00", 2.5)]
-    panel.update_values(0.3, rows, False)
+    rows = [("column|f1|P1", "P1", "#ff0000", [1.5]),
+            ("column|f1|P2", "P2", "#00ff00", [2.5, 3.5])]
+    panel.update_values(0.3, rows)
     app.processEvents()
-    assert panel._table.rowCount() == 2
-    assert panel._table.item(0, 0).data(_KEY_ROLE) == "column|f1|P1"
+    tree = panel._tree
+    assert tree.topLevelItemCount() == 2
+    assert tree.topLevelItem(0).data(0, _KEY_ROLE) == "column|f1|P1"
+    assert tree.topLevelItem(0).text(2) == "1.5"          # single value inline
+    assert tree.topLevelItem(1).text(2) == "2 pontos"     # grouped count
+    assert tree.topLevelItem(1).childCount() == 2
+    assert tree.topLevelItem(1).child(0).text(2) == "2.5"
     captured = []
     panel.color_change_requested.connect(captured.append)
-    panel._on_cell_clicked(1, 0)          # swatch column of P2
+    panel._on_item_clicked(tree.topLevelItem(1), 0)   # swatch column of P2
     assert captured == ["column|f1|P2"]
     captured.clear()
-    panel._on_cell_clicked(0, 1)          # name column -> ignored
+    panel._on_item_clicked(tree.topLevelItem(0), 1)   # name column -> ignored
+    panel._on_item_clicked(tree.topLevelItem(1).child(0), 0)  # child -> no key
     assert captured == []
     panel.hide()
+
+
+def test_polyline_crossings_pure():
+    from plotxy_app.plot_area import polyline_crossings as pc
+    # 0 crossings
+    assert len(pc(np.array([5.0, 6.0, 7.0]), np.array([1.0, 2.0, 3.0]), 0.0)) == 0
+    # 1 crossing, interpolated
+    vals = pc(np.array([0.0, 2.0]), np.array([10.0, 20.0]), 1.0)
+    assert np.allclose(vals, [15.0])
+    # k crossings on an oscillating polyline
+    a = np.array([0.0, 2.0, 0.0, 2.0])
+    b = np.array([0.0, 1.0, 2.0, 3.0])
+    assert np.allclose(pc(a, b, 1.0), [0.5, 1.5, 2.5])
+    # level exactly on a shared sample -> deduplicated to one point
+    vals = pc(np.array([0.0, 1.0, 2.0]), np.array([0.0, 5.0, 10.0]), 1.0)
+    assert np.allclose(vals, [5.0])
+    # NaN segments are skipped
+    a = np.array([0.0, np.nan, 0.0, 2.0])
+    b = np.array([0.0, 1.0, 2.0, 3.0])
+    assert np.allclose(pc(a, b, 1.0), [2.5])
+
+
+def test_vertical_cursor_multiple_crossings(app):
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.show()
+    app.processEvents()
+    # non-monotonic X zigzag: x=1 is crossed by three segments
+    x = np.array([0.0, 2.0, 0.0, 2.0])
+    y = np.array([0.0, 1.0, 2.0, 3.0])
+    captured = []
+    pa.v_cursor_moved.connect(lambda c, rows: captured.append((c, rows)))
+    pa.set_series("xk", "x", x, [("k1", "s1", y)])
+    app.processEvents()
+    c, rows = captured[-1]
+    assert abs(c - 1.0) < 1e-9  # cursor snapped to mid-range
+    key, label, color, vals = rows[0]
+    assert np.allclose(sorted(vals), [0.5, 1.5, 2.5])
+    # markers show all three intersection points
+    assert len(pa._markers.data) == 3
+    pa.hide()
+
+
+def test_horizontal_cursor_crossings(app):
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.show()
+    app.processEvents()
+    x = np.arange(5.0)                       # 0..4
+    y = np.array([0.0, 2.0, 0.0, 2.0, 0.0])  # crosses y=1 four times
+    captured = []
+    pa.h_cursor_moved.connect(lambda c, rows: captured.append((c, rows)))
+    pa.set_series("xk", "x", x, [("k1", "s1", y)])
+    pa.set_cursor_visible("h", True)
+    app.processEvents()
+    c, rows = captured[-1]
+    assert abs(c - 1.0) < 1e-9  # hcursor starts at mid of Y range (0..2)
+    _key, _label, _color, vals = rows[0]
+    assert np.allclose(sorted(vals), [0.5, 1.5, 2.5, 3.5])
+    assert len(pa._h_markers.data) == 4
+    # disabling clears markers and emits empty
+    pa.set_cursor_visible("h", False)
+    app.processEvents()
+    c, rows = captured[-1]
+    assert rows == []
+    assert len(pa._h_markers.data) == 0
+    pa.hide()
+
+
+def test_cursor_menu_defaults_and_toggle(win, app):
+    # defaults: vertical on, horizontal off
+    v, h = win._cursor_menu.states()
+    assert v and not h
+    assert win._plot._cursor.isVisible()
+    assert not win._plot._hcursor.isVisible()
+    assert win._v_readout.isVisible()
+    assert not win._h_readout.isVisible()
+    # enable horizontal -> line, markers and panel appear, tree populates
+    win._cursor_menu._h_check.setChecked(True)
+    app.processEvents()
+    assert win._plot._hcursor.isVisible()
+    assert win._h_readout.isVisible()
+    assert win._h_readout._tree.topLevelItemCount() >= 1
+    # disable vertical -> its line and panel hide
+    win._cursor_menu._v_check.setChecked(False)
+    app.processEvents()
+    assert not win._plot._cursor.isVisible()
+    assert not win._v_readout.isVisible()
+    # restore defaults for other tests
+    win._cursor_menu._v_check.setChecked(True)
+    win._cursor_menu._h_check.setChecked(False)
+    app.processEvents()
 
 
 def test_axis_popup_wiring(win, app):

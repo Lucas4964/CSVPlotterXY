@@ -13,10 +13,11 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .axis_panel import AxisPanel
+from .cursor_menu import CursorMenu
 from .data_model import DataLoadError, load_csv
 from .plot_area import PlotArea
 from .project import INDEX_NAME, Project, ProjectError, SeriesRef
-from .readout_panel import ReadoutPanel
+from .readout_panel import CursorReadout
 from .series_dialog import SeriesDialog
 from .series_panel import PanelGroup, PanelSeries, SeriesPanel
 from .themes import THEMES, apply_app_theme
@@ -58,6 +59,10 @@ class MainWindow(QMainWindow):
         goto_btn.clicked.connect(self._on_goto_x)
         toolbar.addWidget(goto_btn)
 
+        self._cursors_btn = QPushButton("Cursores")
+        self._cursors_btn.clicked.connect(self._open_cursor_popup)
+        toolbar.addWidget(self._cursors_btn)
+
         self._scale_btn = QPushButton("Escala…")
         self._scale_btn.clicked.connect(self._open_axis_popup)
         toolbar.addWidget(self._scale_btn)
@@ -72,12 +77,19 @@ class MainWindow(QMainWindow):
         # --- central splitter
         self._panel = SeriesPanel()
         self._plot = PlotArea()
-        self._readout = ReadoutPanel()
+        # one readout section per cursor, stacked vertically on the right
+        self._v_readout = CursorReadout("Cursor vertical", "X", "Y")
+        self._h_readout = CursorReadout("Cursor horizontal", "Y", "X")
+
+        readouts = QSplitter(Qt.Orientation.Vertical)
+        readouts.addWidget(self._v_readout)
+        readouts.addWidget(self._h_readout)
+        self._h_readout.hide()  # horizontal cursor starts disabled
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._panel)
         splitter.addWidget(self._plot)
-        splitter.addWidget(self._readout)
+        splitter.addWidget(readouts)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
@@ -89,6 +101,11 @@ class MainWindow(QMainWindow):
         self._axis = AxisPanel()
         self._axis.setWindowFlags(Qt.WindowType.Popup)
 
+        # cursor toggles live in a dropdown popup as well
+        self._cursor_menu = CursorMenu()
+        self._cursor_menu.setWindowFlags(Qt.WindowType.Popup)
+        self._cursor_menu.cursors_changed.connect(self._on_cursors_changed)
+
         # --- status bar
         self._status_info = QLabel("")
         self.statusBar().addWidget(self._status_info)
@@ -99,8 +116,10 @@ class MainWindow(QMainWindow):
         self._panel.new_series_requested.connect(self._on_new_series)
         self._panel.edit_series_requested.connect(self._on_edit_series)
         self._panel.delete_series_requested.connect(self._on_delete_series)
-        self._plot.cursor_moved.connect(self._readout.update_values)
-        self._readout.color_change_requested.connect(self._plot.prompt_color)
+        self._plot.v_cursor_moved.connect(self._v_readout.update_values)
+        self._plot.h_cursor_moved.connect(self._h_readout.update_values)
+        self._v_readout.color_change_requested.connect(self._plot.prompt_color)
+        self._h_readout.color_change_requested.connect(self._plot.prompt_color)
         self._axis.range_changed.connect(self._on_axis_range_changed)
         self._axis.auto_requested.connect(lambda: self._plot.autorange())
         self._plot.view_range_changed.connect(self._axis.set_ranges)
@@ -272,6 +291,21 @@ class MainWindow(QMainWindow):
         self._axis.move(pos)
         self._axis.show()
         self._axis.raise_()
+
+    def _open_cursor_popup(self) -> None:
+        pos = self._cursors_btn.mapToGlobal(
+            QPoint(0, self._cursors_btn.height()))
+        self._cursor_menu.move(pos)
+        self._cursor_menu.show()
+        self._cursor_menu.raise_()
+
+    def _on_cursors_changed(self, vertical: bool, horizontal: bool) -> None:
+        # panels first, so the plot's re-emit isn't dropped by the
+        # readouts' hidden-panel early-out
+        self._v_readout.setVisible(vertical)
+        self._h_readout.setVisible(horizontal)
+        self._plot.set_cursor_visible("v", vertical)
+        self._plot.set_cursor_visible("h", horizontal)
 
     def _on_axis_range_changed(self, xmin, xmax, ymin, ymax) -> None:
         self._plot.set_manual_ranges(xmin, xmax, ymin, ymax)

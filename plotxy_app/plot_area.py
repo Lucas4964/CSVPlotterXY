@@ -16,15 +16,55 @@ pg.setConfigOptions(antialias=True)
 _INCREASING, _DECREASING, _NON_MONOTONIC = 0, 1, 2
 
 
+def polyline_crossings(a: np.ndarray, b: np.ndarray, level: float) -> np.ndarray:
+    """All interpolated values of `b` where the polyline (a, b) crosses
+    a == level, sorted ascending. Vectorized; segments containing NaN are
+    skipped; coincident crossings from consecutive segments sharing an
+    endpoint are deduplicated."""
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if len(a) < 2:
+        if len(a) == 1 and np.isfinite(a[0]) and a[0] == level and np.isfinite(b[0]):
+            return np.array([b[0]])
+        return np.empty(0)
+    d = a - level
+    d0, d1 = d[:-1], d[1:]
+    b0, b1 = b[:-1], b[1:]
+    valid = (np.isfinite(d0) & np.isfinite(d1)
+             & np.isfinite(b0) & np.isfinite(b1))
+    with np.errstate(invalid="ignore"):
+        cross = valid & (d0 * d1 <= 0) & ~((d0 == 0) & (d1 == 0))
+    idx = np.nonzero(cross)[0]
+    if len(idx) == 0:
+        # a stretch lying exactly on the level (d == 0 throughout)
+        flat = valid & (d0 == 0) & (d1 == 0)
+        if np.any(flat):
+            i = int(np.nonzero(flat)[0][0])
+            return np.array([b[i]])
+        return np.empty(0)
+    denom = d0[idx] - d1[idx]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = np.where(denom != 0, d0[idx] / denom, 0.0)
+    vals = np.sort(b0[idx] + t * (b1[idx] - b0[idx]))
+    if len(vals) > 1:
+        span = max(float(abs(vals[-1] - vals[0])), 1e-30)
+        keep = np.concatenate(([True], np.abs(np.diff(vals)) > 1e-9 * span))
+        vals = vals[keep]
+    return vals
+
+
 class PlotArea(QWidget):
     """Interactive plot working purely on arrays (no dataset knowledge).
 
     set_series receives the X array plus (key, label, y) tuples already
-    paired/truncated by the Project. cursor_moved emits
-    (x, [(label, color, y)], nearest_mode).
+    paired/truncated by the Project. Two draggable cursors (vertical and
+    horizontal) report every intersection with the plotted series:
+    v_cursor_moved / h_cursor_moved emit
+    (coord, [(key, label, color, [values…])]).
     """
 
-    cursor_moved = Signal(float, list, bool)
+    v_cursor_moved = Signal(float, list)
+    h_cursor_moved = Signal(float, list)
     view_range_changed = Signal(float, float, float, float)
 
     def __init__(self, parent: QWidget | None = None):
@@ -40,7 +80,8 @@ class PlotArea(QWidget):
         self._color_of: dict[str, str] = {}
         self._color_override: dict[str, str] = {}  # user-picked colors, per key
         self._theme: Theme | None = None
-        self._marker_x = 0.0
+        self._v_enabled = True   # vertical cursor shown by default
+        self._h_enabled = False  # horizontal cursor off by default
         self._syncing = False  # guard: region <-> zoom-panel feedback loop
 
         layout = QVBoxLayout(self)
@@ -57,13 +98,23 @@ class PlotArea(QWidget):
 
         self._cursor = pg.InfiniteLine(angle=90, movable=True)
         self._cursor.setZValue(90)
-        self._cursor.sigPositionChanged.connect(self._on_cursor_moved)
+        self._cursor.sigPositionChanged.connect(self._on_v_cursor_moved)
         self._pw.addItem(self._cursor)
         self._cursor.hide()
 
         self._markers = pg.ScatterPlotItem(size=9, pxMode=True)
         self._markers.setZValue(100)
         self._pw.addItem(self._markers)
+
+        self._hcursor = pg.InfiniteLine(angle=0, movable=True)
+        self._hcursor.setZValue(90)
+        self._hcursor.sigPositionChanged.connect(self._on_h_cursor_moved)
+        self._pw.addItem(self._hcursor)
+        self._hcursor.hide()
+
+        self._h_markers = pg.ScatterPlotItem(size=9, pxMode=True)
+        self._h_markers.setZValue(100)
+        self._pw.addItem(self._h_markers)
 
         # click tooltip (Desmos-style): single point, dismissable
         self._click_marker = pg.ScatterPlotItem(size=11, pxMode=True)
@@ -154,12 +205,15 @@ class PlotArea(QWidget):
             self._pw.autoRange()
         else:
             self.apply_view_limits()
+        self._update_hcursor_bounds(reset=x_changed)
 
         self._clear_tooltip()
         has_curves = bool(self._curves)
-        self._cursor.setVisible(has_curves)
-        self._markers.setVisible(has_curves)
-        self._on_cursor_moved()
+        self._cursor.setVisible(has_curves and self._v_enabled)
+        self._markers.setVisible(has_curves and self._v_enabled)
+        self._hcursor.setVisible(has_curves and self._h_enabled)
+        self._h_markers.setVisible(has_curves and self._h_enabled)
+        self._update_cursor_readouts()
 
     def clear(self) -> None:
         for key in list(self._curves):
@@ -170,8 +224,12 @@ class PlotArea(QWidget):
         self._cursor.hide()
         self._markers.hide()
         self._markers.setData([])
+        self._hcursor.hide()
+        self._h_markers.hide()
+        self._h_markers.setData([])
         self._clear_tooltip()
-        self.cursor_moved.emit(float("nan"), [], False)
+        self.v_cursor_moved.emit(float("nan"), [])
+        self.h_cursor_moved.emit(float("nan"), [])
 
     def autorange(self) -> None:
         self._pw.getViewBox().enableAutoRange(x=True, y=True)
@@ -262,6 +320,32 @@ class PlotArea(QWidget):
     def set_cursor_x(self, value: float) -> None:
         self._cursor.setValue(value)
 
+    def set_cursor_visible(self, orientation: str, visible: bool) -> None:
+        """Show/hide the vertical ('v') or horizontal ('h') cursor."""
+        has_curves = bool(self._curves)
+        if orientation == "v":
+            self._v_enabled = visible
+            self._cursor.setVisible(visible and has_curves)
+            self._markers.setVisible(visible and has_curves)
+            self._on_v_cursor_moved()
+        else:
+            self._h_enabled = visible
+            self._hcursor.setVisible(visible and has_curves)
+            self._h_markers.setVisible(visible and has_curves)
+            self._on_h_cursor_moved()
+
+    def _update_hcursor_bounds(self, reset: bool) -> None:
+        finite = [y[np.isfinite(y)] for y in self._ys.values()
+                  if np.any(np.isfinite(y))]
+        if not finite:
+            return
+        stacked = np.concatenate(finite)
+        ymin, ymax = float(stacked.min()), float(stacked.max())
+        self._hcursor.setBounds((ymin, ymax))
+        cur = float(self._hcursor.value())
+        if reset or not (ymin <= cur <= ymax):
+            self._hcursor.setValue((ymin + ymax) / 2)
+
     def set_zoom_visible(self, visible: bool) -> None:
         self._zoom_pw.setVisible(visible)
         self._region.setVisible(visible and self._x is not None)
@@ -286,6 +370,9 @@ class PlotArea(QWidget):
             label.setText(label.text)
         self._cursor.setPen(pg.mkPen(theme.cursor_color, width=2))
         self._cursor.setHoverPen(pg.mkPen(theme.cursor_color, width=4))
+        # horizontal cursor uses the accent color for instant distinction
+        self._hcursor.setPen(pg.mkPen(theme.accent, width=2))
+        self._hcursor.setHoverPen(pg.mkPen(theme.accent, width=4))
 
         accent = QColor(theme.accent)
         brush = QColor(accent); brush.setAlpha(40)
@@ -304,7 +391,7 @@ class PlotArea(QWidget):
             self._zoom_curves[key].setPen(pen)
         if self._click_label.isVisible():
             self._apply_tooltip_theme()
-        self._on_cursor_moved()
+        self._update_cursor_readouts()
 
     # ------------------------------------------------------------ internal
 
@@ -339,7 +426,7 @@ class PlotArea(QWidget):
             self._curves[key].setPen(pen)
         if key in self._zoom_curves:
             self._zoom_curves[key].setPen(pen)
-        self._on_cursor_moved()
+        self._update_cursor_readouts()
 
     def _set_x(self, x_key: str, x_label: str, x: np.ndarray) -> None:
         self._x_key = x_key
@@ -452,44 +539,69 @@ class PlotArea(QWidget):
         self._click_label.border = pg.mkPen(t.border, width=1)
         self._click_label.update()
 
-    def _on_cursor_moved(self) -> None:
-        if self._x is None or not self._curves:
+    def _update_cursor_readouts(self) -> None:
+        self._on_v_cursor_moved()
+        self._on_h_cursor_moved()
+
+    def _spot(self, x: float, y: float, color: str) -> dict:
+        return {
+            "pos": (x, y),
+            "brush": pg.mkBrush(color),
+            "pen": pg.mkPen("#ffffff" if self._theme and self._theme.name == "dark"
+                            else "#000000", width=1),
+        }
+
+    def _on_v_cursor_moved(self) -> None:
+        if self._x is None or not self._curves or not self._v_enabled:
             self._markers.setData([])
-            self.cursor_moved.emit(float("nan"), [], False)
+            self.v_cursor_moved.emit(float("nan"), [])
             return
         cx = float(self._cursor.value())
-        keys = list(self._curves)
-        ys = self._values_at(cx, keys)
-
         spots, rows = [], []
-        for key, y in zip(keys, ys):
-            color = self._color_of[key]
-            rows.append((key, self._labels[key], color, y))
-            if np.isfinite(y):
-                spots.append({
-                    "pos": (self._marker_x if self._x_kind == _NON_MONOTONIC else cx, y),
-                    "brush": pg.mkBrush(color),
-                    "pen": pg.mkPen("#ffffff" if self._theme and self._theme.name == "dark"
-                                    else "#000000", width=1),
-                })
+        if self._x_kind != _NON_MONOTONIC:
+            # fast path: single interpolated value per series
+            keys = list(self._curves)
+            ys = self._values_at(cx, keys)
+            for key, y in zip(keys, ys):
+                color = self._color_of[key]
+                vals = [y] if np.isfinite(y) else []
+                rows.append((key, self._labels[key], color, vals))
+                if vals:
+                    spots.append(self._spot(cx, y, color))
+        else:
+            # general case: every real crossing of x == cx
+            for key in self._curves:
+                color = self._color_of[key]
+                vals = [float(v) for v in
+                        polyline_crossings(self._x, self._ys[key], cx)]
+                rows.append((key, self._labels[key], color, vals))
+                spots.extend(self._spot(cx, v, color) for v in vals)
         self._markers.setData(spots)
-        self.cursor_moved.emit(cx, rows, self._x_kind == _NON_MONOTONIC)
+        self.v_cursor_moved.emit(cx, rows)
+
+    def _on_h_cursor_moved(self) -> None:
+        if self._x is None or not self._curves or not self._h_enabled:
+            self._h_markers.setData([])
+            self.h_cursor_moved.emit(float("nan"), [])
+            return
+        cy = float(self._hcursor.value())
+        spots, rows = [], []
+        for key in self._curves:
+            color = self._color_of[key]
+            vals = [float(v) for v in
+                    polyline_crossings(self._ys[key], self._x, cy)]
+            rows.append((key, self._labels[key], color, vals))
+            spots.extend(self._spot(v, cy, color) for v in vals)
+        self._h_markers.setData(spots)
+        self.h_cursor_moved.emit(cy, rows)
 
     def _values_at(self, cx: float, keys: list[str]) -> list[float]:
-        """Value of each series at cursor X. Monotonic X: one searchsorted
-        + linear interpolation shared by all series. Non-monotonic X:
-        nearest sample."""
+        """Value of each series at cursor X for monotonic X: one
+        searchsorted + linear interpolation shared by all series."""
         x = self._x
         n = len(x)
-        self._marker_x = cx
         if n == 0:
             return [float("nan")] * len(keys)
-
-        if self._x_kind == _NON_MONOTONIC:
-            with np.errstate(invalid="ignore"):
-                idx = int(np.nanargmin(np.abs(x - cx)))
-            self._marker_x = float(x[idx])
-            return [float(self._ys[key][idx]) for key in keys]
 
         i = int(np.searchsorted(self._x_sorted, cx))
         i = max(1, min(i, n - 1))
