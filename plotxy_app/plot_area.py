@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QColorDialog, QSplitter, QVBoxLayout, QWidget
 
+from .measures import compute_measures
 from .themes import Theme
 
 pg.setConfigOptions(antialias=True)
@@ -66,6 +67,7 @@ class PlotArea(QWidget):
     v_cursor_moved = Signal(float, list)
     h_cursor_moved = Signal(float, list)
     view_range_changed = Signal(float, float, float, float)
+    measure_region_changed = Signal(float, float)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -140,6 +142,16 @@ class PlotArea(QWidget):
         self._pw.addItem(self._region)
         self._region.hide()
 
+        # measures region: independent from the zoom region; emits only on
+        # release (sigRegionChangeFinished) so stats aren't recomputed
+        # continuously during the drag
+        self._measure_region = pg.LinearRegionItem(movable=True)
+        self._measure_region.setZValue(75)
+        self._measure_region.sigRegionChangeFinished.connect(
+            self._on_measure_region_finished)
+        self._pw.addItem(self._measure_region)
+        self._measure_region.hide()
+
         # zoom panel (hidden by default)
         self._zoom_pw = pg.PlotWidget()
         self._zoom_item = self._zoom_pw.getPlotItem()
@@ -206,6 +218,9 @@ class PlotArea(QWidget):
             self._cursor.setValue((xmin + xmax) / 2)
             self._reset_region()
             self._pw.autoRange()
+            if self._measure_region.isVisible():
+                # X data changed entirely: re-seat the measures region
+                self.set_measure_region_visible(True)
         self._update_hcursor_bounds(reset=x_changed)
 
         self._clear_tooltip()
@@ -228,6 +243,7 @@ class PlotArea(QWidget):
         self._hcursor.hide()
         self._h_markers.hide()
         self._h_markers.setData([])
+        self._measure_region.hide()
         self._y_bounds = None
         self._clear_tooltip()
         self.v_cursor_moved.emit(float("nan"), [])
@@ -307,6 +323,35 @@ class PlotArea(QWidget):
         if visible and self._x is not None:
             self._reset_region()
 
+    # ------------------------------------------------------------ measures
+
+    def set_measure_region_visible(self, visible: bool) -> None:
+        """Show/hide the measures selection region. On show, place it over
+        the middle third of the current view and emit the initial range."""
+        show = visible and self._x is not None and bool(self._curves)
+        self._measure_region.setVisible(show)
+        if show:
+            (x0, x1), _ = self._plot_item.getViewBox().viewRange()
+            span = x1 - x0
+            self._measure_region.setRegion(
+                (x0 + span / 3, x0 + 2 * span / 3))
+            self._on_measure_region_finished()
+
+    def _on_measure_region_finished(self) -> None:
+        if not self._measure_region.isVisible():
+            return
+        lo, hi = self._measure_region.getRegion()
+        self.measure_region_changed.emit(float(lo), float(hi))
+
+    def measures_rows(self, lo: float, hi: float,
+                      ) -> list[tuple[str, str, str, dict | None]]:
+        """Interval statistics for every active curve (see measures.py)."""
+        if self._x is None:
+            return []
+        return [(key, self._labels[key], self._color_of[key],
+                 compute_measures(self._x, self._ys[key], lo, hi, self._x_kind))
+                for key in self._curves]
+
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
         for pw, item in ((self._pw, self._plot_item),
@@ -336,6 +381,15 @@ class PlotArea(QWidget):
         self._region.setHoverBrush(hover)
         for line in self._region.lines:
             line.setPen(pg.mkPen(theme.accent, width=1))
+
+        # measures region: amber-tinted, visually distinct from the zoom one
+        mcolor = QColor(theme.cursor_color)
+        mbrush = QColor(mcolor); mbrush.setAlpha(35)
+        mhover = QColor(mcolor); mhover.setAlpha(55)
+        self._measure_region.setBrush(mbrush)
+        self._measure_region.setHoverBrush(mhover)
+        for line in self._measure_region.lines:
+            line.setPen(pg.mkPen(theme.cursor_color, width=1))
 
         for i, key in enumerate(self._curves):
             color = (self._color_override.get(key)

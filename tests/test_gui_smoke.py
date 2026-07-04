@@ -543,6 +543,60 @@ def test_derivative_custom_series_integration(win, app):
         _np.gradient(p1, t))
 
 
+def test_measures_window_flow(win, app):
+    import numpy as _np
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    # open the Medidas window -> region appears with an initial interval
+    win._open_measures()
+    app.processEvents()
+    assert win._measures is not None and win._measures.isVisible()
+    assert win._plot._measure_region.isVisible()
+    assert win._measures._table.rowCount() >= 1
+
+    # set a known interval and finish the drag -> table shows exact stats
+    win._plot._measure_region.setRegion((0.15, 0.65))
+    win._plot._measure_region.sigRegionChangeFinished.emit(
+        win._plot._measure_region)
+    app.processEvents()
+    t = _np.arange(10) * 0.1
+    p1 = _np.arange(10, dtype=float)
+    sel = (t >= 0.15) & (t <= 0.65)
+    tbl = win._measures._table
+    # find P1's row (column 1 = label)
+    row = next(r for r in range(tbl.rowCount())
+               if tbl.item(r, 1).text() == "P1")
+    assert float(tbl.item(row, 2).text()) == p1[sel].max()      # Máx
+    assert float(tbl.item(row, 3).text()) == p1[sel].min()      # Mín
+    assert _np.isclose(float(tbl.item(row, 4).text()), p1[sel].mean())
+    assert _np.isclose(float(tbl.item(row, 7).text()),
+                       _np.trapezoid(p1[sel], t[sel]))          # Área
+
+    # cache: same interval again -> measures_rows NOT called
+    calls = []
+    original = win._plot.measures_rows
+    win._plot.measures_rows = lambda lo, hi: calls.append(1) or original(lo, hi)
+    win._update_measures(0.15, 0.65)
+    assert calls == []          # cached
+    win._update_measures(0.1, 0.7)
+    assert calls == [1]         # new interval -> recomputed
+    win._plot.measures_rows = original
+
+    # toggling another series refreshes the table (cache key changed)
+    win._panel.check_ref(SeriesRef("column", f1, "P2"))
+    app.processEvents()
+    labels = {win._measures._table.item(r, 1).text()
+              for r in range(win._measures._table.rowCount())}
+    assert "P2" in labels
+
+    # closing the window hides the region
+    win._measures.close()
+    app.processEvents()
+    assert not win._plot._measure_region.isVisible()
+
+
 def test_decimal_validators_reject_comma(app):
     from PySide6.QtGui import QValidator
     from plotxy_app.axis_panel import AxisPanel

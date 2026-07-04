@@ -17,6 +17,7 @@ from .axis_panel import AxisPanel
 from .cursor_menu import CursorMenu
 from .data_model import DataLoadError, load_csv
 from .goto_panel import GotoPanel
+from .measures import MeasuresWindow
 from .plot_area import PlotArea
 from .project import INDEX_NAME, Project, ProjectError, SeriesRef
 from .readout_panel import CursorReadout
@@ -69,6 +70,10 @@ class MainWindow(QMainWindow):
         self._scale_btn.clicked.connect(self._open_axis_popup)
         toolbar.addWidget(self._scale_btn)
 
+        measures_btn = QPushButton("Medidas")
+        measures_btn.clicked.connect(self._open_measures)
+        toolbar.addWidget(measures_btn)
+
         self._theme_btn = QPushButton()
         self._theme_btn.clicked.connect(self._toggle_theme)
         toolbar.addWidget(self._theme_btn)
@@ -114,6 +119,10 @@ class MainWindow(QMainWindow):
         self._goto.set_enabled_states(*self._cursor_menu.states())
         self._goto.goto_requested.connect(self._on_goto_requested)
 
+        # Medidas window (lazy) + measures cache
+        self._measures: MeasuresWindow | None = None
+        self._measures_cache_key = None
+
         # toolbar dropdowns work as toggles: a Qt.Popup closes on the
         # press that lands on its own button, so an event filter records
         # each hide time and the toggle handler skips the immediate reopen
@@ -139,6 +148,7 @@ class MainWindow(QMainWindow):
         self._cursor_menu.interpolation_changed.connect(
             self._plot.set_click_interpolation)
         self._cursor_menu.snap_changed.connect(self._plot.set_cursor_snap)
+        self._plot.measure_region_changed.connect(self._update_measures)
         self._axis.range_changed.connect(self._on_axis_range_changed)
         self._axis.auto_requested.connect(lambda: self._plot.autorange())
         self._plot.view_range_changed.connect(self._axis.set_ranges)
@@ -227,6 +237,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"Séries com tamanhos diferentes — usando os primeiros "
                 f"{rp.n_points} pontos.", 6000)
+        # active series changed: refresh the measures table for the
+        # current interval (the cache key includes the curve set)
+        if (self._measures is not None and self._measures.isVisible()
+                and self._plot._measure_region.isVisible()):
+            lo, hi = self._plot._measure_region.getRegion()
+            self._update_measures(float(lo), float(hi))
 
     def _on_remove_file(self, file_id: str) -> None:
         deps = self._project.dependents_on_file(file_id)
@@ -342,6 +358,36 @@ class MainWindow(QMainWindow):
 
     def _on_axis_range_changed(self, xmin, xmax, ymin, ymax) -> None:
         self._plot.set_manual_ranges(xmin, xmax, ymin, ymax)
+
+    # ------------------------------------------------------------ measures
+
+    def _open_measures(self) -> None:
+        if not self._plot._curves:
+            QMessageBox.information(
+                self, "Medidas", "Plote pelo menos uma série primeiro.")
+            return
+        if self._measures is None:
+            self._measures = MeasuresWindow(self)
+            self._measures.visibility_changed.connect(
+                self._on_measures_visibility)
+        self._measures.show()
+        self._measures.raise_()
+        self._measures.activateWindow()
+
+    def _on_measures_visibility(self, active: bool) -> None:
+        self._plot.set_measure_region_visible(active)
+
+    def _update_measures(self, lo: float, hi: float) -> None:
+        """Recompute the measures table only when the interval (or the
+        active series set) actually changed — cached otherwise."""
+        if self._measures is None or not self._measures.isVisible():
+            return
+        key = (round(lo, 12), round(hi, 12), self._plot._x_key,
+               frozenset(self._plot._curves))
+        if key == self._measures_cache_key:
+            return
+        self._measures_cache_key = key
+        self._measures.set_rows(lo, hi, self._plot.measures_rows(lo, hi))
 
     def _open_goto_popup(self) -> None:
         def prepare():
