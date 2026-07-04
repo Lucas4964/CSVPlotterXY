@@ -597,6 +597,80 @@ def test_measures_window_flow(win, app):
     assert not win._plot._measure_region.isVisible()
 
 
+def test_measures_region_persists_on_refocus(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    win._open_measures()
+    app.processEvents()
+    # user picks a specific interval
+    win._plot._measure_region.setRegion((0.2, 0.55))
+    win._plot._measure_region.sigRegionChangeFinished.emit(
+        win._plot._measure_region)
+    app.processEvents()
+    # losing then regaining focus must NOT reset the selection
+    win._on_measures_visibility(False)
+    app.processEvents()
+    win._on_measures_visibility(True)
+    app.processEvents()
+    lo, hi = win._plot._measure_region.getRegion()
+    assert abs(lo - 0.2) < 1e-9 and abs(hi - 0.55) < 1e-9
+    win._measures.close()
+    app.processEvents()
+
+
+def test_measures_maxmin_cell_interactions(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    win._open_measures()
+    win._plot._measure_region.setRegion((0.15, 0.65))
+    win._plot._measure_region.sigRegionChangeFinished.emit(
+        win._plot._measure_region)
+    app.processEvents()
+    tbl = win._measures._table
+    row = next(r for r in range(tbl.rowCount())
+               if tbl.item(r, 1).text() == "P1")
+    # P1 = i, time = 0.1*i; within [0.15, 0.65] -> samples i=2..6
+    # max at i=6 -> (0.6, 6); min at i=2 -> (0.2, 2)
+
+    # left-click Máx -> tooltip at the max point on the graph
+    win._measures._on_cell_clicked(row, 2)
+    app.processEvents()
+    assert win._plot._click_label.isVisible()
+    assert win._plot._click_label.textItem.toPlainText() == "(0.6, 6)"
+
+    # left-click Mín -> tooltip at the min point (independent of the above)
+    win._measures._on_cell_clicked(row, 3)
+    app.processEvents()
+    assert win._plot._click_label.textItem.toPlainText() == "(0.2, 2)"
+
+    # right-click "Ir para" on Máx -> vertical cursor jumps to max_x
+    m = win._measures._rows[row][3]
+    win._measures.goto_x_requested.emit(m["max_x"])
+    app.processEvents()
+    assert abs(win._plot._cursor.value() - 0.6) < 1e-9
+    # and on Mín
+    win._measures.goto_x_requested.emit(m["min_x"])
+    app.processEvents()
+    assert abs(win._plot._cursor.value() - 0.2) < 1e-9
+    win._measures.close()
+    app.processEvents()
+
+
+def test_measures_region_uses_accent_color(win, app):
+    from PySide6.QtGui import QColor
+    f1 = file_ids(win)[0]
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    accent = QColor(win._theme.accent)
+    brush = win._plot._measure_region.brush.color()
+    assert (brush.red(), brush.green(), brush.blue()) == \
+        (accent.red(), accent.green(), accent.blue())
+
+
 def test_decimal_validators_reject_comma(app):
     from PySide6.QtGui import QValidator
     from plotxy_app.axis_panel import AxisPanel

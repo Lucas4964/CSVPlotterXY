@@ -11,10 +11,25 @@ def test_basic_increasing():
     m = compute_measures(x, y, 1.0, 3.0, _INC)
     assert m["n"] == 3
     assert m["max"] == 20.0 and m["min"] == 10.0
+    assert m["max_x"] == 2.0                    # Y peaks at x=2
+    assert m["min_x"] == 1.0                    # first of the two 10.0 (x=1)
     assert np.isclose(m["mean"], (10 + 20 + 10) / 3)
     assert m["dx"] == 2.0                      # 3 - 1
     assert m["dy"] == 0.0                      # 10 - 10
     assert np.isclose(m["area"], np.trapezoid(y[1:4], x[1:4]))
+
+
+def test_argmax_argmin_locations():
+    x = np.array([10.0, 11.0, 12.0, 13.0, 14.0])
+    y = np.array([3.0, -5.0, 8.0, 1.0, 8.0])
+    m = compute_measures(x, y, 10.0, 14.0, _INC)
+    assert m["max"] == 8.0 and m["max_x"] == 12.0   # first max at x=12
+    assert m["min"] == -5.0 and m["min_x"] == 11.0
+    # decreasing X: locations still in original coordinates
+    xd = x[::-1].copy()
+    yd = np.array([8.0, 1.0, 8.0, -5.0, 3.0])       # mirror of y
+    md = compute_measures(xd, yd, 10.0, 14.0, _DEC)
+    assert md["min"] == -5.0 and md["min_x"] == 11.0
 
 
 def test_area_known_ramp():

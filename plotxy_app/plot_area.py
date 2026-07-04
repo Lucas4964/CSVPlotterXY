@@ -86,6 +86,7 @@ class PlotArea(QWidget):
         self._h_enabled = False  # horizontal cursor off by default
         self._click_interpolate = False  # click-tooltip snaps to samples
         self._snap_to_samples = False    # restrict cursor motion to samples
+        self._measure_positioned = False  # measures region placed once, persists
         self._y_bounds: tuple[float, float] | None = None
         self._syncing = False  # guard: region <-> zoom-panel feedback loop
 
@@ -218,8 +219,9 @@ class PlotArea(QWidget):
             self._cursor.setValue((xmin + xmax) / 2)
             self._reset_region()
             self._pw.autoRange()
+            # new X domain: re-seat the measures region on next show (or now)
+            self._measure_positioned = False
             if self._measure_region.isVisible():
-                # X data changed entirely: re-seat the measures region
                 self.set_measure_region_visible(True)
         self._update_hcursor_bounds(reset=x_changed)
 
@@ -244,6 +246,7 @@ class PlotArea(QWidget):
         self._h_markers.hide()
         self._h_markers.setData([])
         self._measure_region.hide()
+        self._measure_positioned = False
         self._y_bounds = None
         self._clear_tooltip()
         self.v_cursor_moved.emit(float("nan"), [])
@@ -326,16 +329,28 @@ class PlotArea(QWidget):
     # ------------------------------------------------------------ measures
 
     def set_measure_region_visible(self, visible: bool) -> None:
-        """Show/hide the measures selection region. On show, place it over
-        the middle third of the current view and emit the initial range."""
+        """Show/hide the measures selection region. The interval is placed
+        once (middle third of the view) and then persists: re-activating
+        the Medidas window must not reset the user's selection."""
         show = visible and self._x is not None and bool(self._curves)
         self._measure_region.setVisible(show)
-        if show:
+        if not show:
+            return
+        if not self._measure_positioned:
             (x0, x1), _ = self._plot_item.getViewBox().viewRange()
             span = x1 - x0
             self._measure_region.setRegion(
                 (x0 + span / 3, x0 + 2 * span / 3))
-            self._on_measure_region_finished()
+            self._measure_positioned = True
+        # emit the current (possibly restored) interval; the main window's
+        # cache skips recompute when it is unchanged
+        self._on_measure_region_finished()
+
+    def show_point_tooltip(self, key: str, x: float, y: float) -> None:
+        """Show the (x, y) info tooltip at a point on a curve — same as a
+        click on the graph. Invoked from the Medidas Máx/Mín cells."""
+        if key in self._curves:
+            self._show_tooltip(key, x, y)
 
     def _on_measure_region_finished(self) -> None:
         if not self._measure_region.isVisible():
@@ -382,14 +397,13 @@ class PlotArea(QWidget):
         for line in self._region.lines:
             line.setPen(pg.mkPen(theme.accent, width=1))
 
-        # measures region: amber-tinted, visually distinct from the zoom one
-        mcolor = QColor(theme.cursor_color)
-        mbrush = QColor(mcolor); mbrush.setAlpha(35)
-        mhover = QColor(mcolor); mhover.setAlpha(55)
+        # measures region: same blue scheme as the local-zoom region
+        mbrush = QColor(accent); mbrush.setAlpha(40)
+        mhover = QColor(accent); mhover.setAlpha(60)
         self._measure_region.setBrush(mbrush)
         self._measure_region.setHoverBrush(mhover)
         for line in self._measure_region.lines:
-            line.setPen(pg.mkPen(theme.cursor_color, width=1))
+            line.setPen(pg.mkPen(theme.accent, width=1))
 
         for i, key in enumerate(self._curves):
             color = (self._color_override.get(key)

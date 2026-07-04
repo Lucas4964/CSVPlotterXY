@@ -20,6 +20,9 @@ from .readout_panel import _COLOR_ROLE, _SWATCH_COLUMN_WIDTH, _SwatchDelegate
 _INCREASING, _DECREASING, _NON_MONOTONIC = 0, 1, 2
 
 COLUMNS = ["Máx", "Mín", "Média", "ΔX", "ΔY", "Área"]
+# table layout: [swatch(0) | Série(1) | Máx(2) | Mín(3) | Média | ΔX | ΔY | Área]
+_MAX_COL = 2
+_MIN_COL = 3
 _TOOLTIPS = {
     "Máx": "Maior valor de Y no intervalo",
     "Mín": "Menor valor de Y no intervalo",
@@ -61,9 +64,13 @@ def compute_measures(x: np.ndarray, y: np.ndarray, lo: float, hi: float,
         return None
 
     area = float(np.trapezoid(ys, xs)) if len(xs) > 1 else 0.0
+    imax = int(np.argmax(ys))
+    imin = int(np.argmin(ys))
     return {
-        "max": float(ys.max()),
-        "min": float(ys.min()),
+        "max": float(ys[imax]),
+        "min": float(ys[imin]),
+        "max_x": float(xs[imax]),  # X where Y is maximal
+        "min_x": float(xs[imin]),  # X where Y is minimal
         "mean": float(ys.mean()),
         "dx": float(xs[-1] - xs[0]),
         "dy": float(ys[-1] - ys[0]),
@@ -78,12 +85,15 @@ class MeasuresWindow(QWidget):
     True while the window is shown and the application holds focus."""
 
     visibility_changed = Signal(bool)
+    point_activated = Signal(str, float, float)  # (key, x, y) of a Máx/Mín cell
+    goto_x_requested = Signal(float)             # move vertical cursor to X
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.Tool)
         self.setWindowTitle("Medidas")
         self.resize(600, 240)
+        self._rows: list[tuple[str, str, str, dict | None]] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -117,12 +127,14 @@ class MeasuresWindow(QWidget):
             header.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_menu)
+        self._table.cellClicked.connect(self._on_cell_clicked)
         layout.addWidget(self._table, stretch=1)
 
     # ------------------------------------------------------------- public
 
     def set_rows(self, lo: float, hi: float,
                  rows: list[tuple[str, str, str, dict | None]]) -> None:
+        self._rows = rows
         self._interval_label.setText(f"X ∈ [{lo:.6g}, {hi:.6g}]")
         self._table.setRowCount(len(rows))
         for r, (_key, label, color, m) in enumerate(rows):
@@ -179,12 +191,32 @@ class MeasuresWindow(QWidget):
 
     # ------------------------------------------------------------ internal
 
+    def _point_at(self, row: int, col: int) -> tuple[float, float] | None:
+        """(x, y) of the Máx/Mín point for a cell, or None."""
+        if col not in (_MAX_COL, _MIN_COL) or not (0 <= row < len(self._rows)):
+            return None
+        m = self._rows[row][3]
+        if m is None:
+            return None
+        return ((m["max_x"], m["max"]) if col == _MAX_COL
+                else (m["min_x"], m["min"]))
+
+    def _on_cell_clicked(self, row: int, col: int) -> None:
+        point = self._point_at(row, col)
+        if point is not None:
+            key = self._rows[row][0]
+            self.point_activated.emit(key, point[0], point[1])
+
     def _on_table_menu(self, pos) -> None:
         item = self._table.itemAt(pos)
         if item is None or item.column() < 2 or item.text() == "—":
             return
-        text = item.text()
         menu = QMenu(self)
+        text = item.text()
         menu.addAction("Copiar valor").triggered.connect(
             lambda: QApplication.clipboard().setText(text))
+        point = self._point_at(item.row(), item.column())
+        if point is not None:
+            menu.addAction("Ir para").triggered.connect(
+                lambda: self.goto_x_requested.emit(point[0]))
         menu.exec(self._table.viewport().mapToGlobal(pos))

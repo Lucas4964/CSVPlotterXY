@@ -370,12 +370,18 @@ class MainWindow(QMainWindow):
             self._measures = MeasuresWindow(self)
             self._measures.visibility_changed.connect(
                 self._on_measures_visibility)
+            self._measures.point_activated.connect(self._plot.show_point_tooltip)
+            self._measures.goto_x_requested.connect(self._on_measures_goto)
         self._measures.show()
         self._measures.raise_()
         self._measures.activateWindow()
 
     def _on_measures_visibility(self, active: bool) -> None:
         self._plot.set_measure_region_visible(active)
+
+    def _on_measures_goto(self, x: float) -> None:
+        self._plot.set_cursor_x(x)
+        self.statusBar().showMessage(f"Cursor em X = {x:.6g}", 4000)
 
     def _update_measures(self, lo: float, hi: float) -> None:
         """Recompute the measures table only when the interval (or the
