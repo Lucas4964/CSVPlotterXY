@@ -17,3 +17,8 @@ gmon.out
 
 # Generated performance-test data
 Data sets/big_1M.csv
+
+# PyInstaller build output
+build/
+dist/
+*.egg-info/

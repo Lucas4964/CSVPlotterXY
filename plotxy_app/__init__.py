@@ -1,3 +1,3 @@
-"""PlotXY-Py — desktop CSV plotting application inspired by MC PlotXY."""
+"""CSVPlotterXY — desktop CSV plotting application inspired by MC PlotXY."""
 
-__version__ = "0.11.0"
+__version__ = "1.0.0"

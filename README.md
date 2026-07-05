@@ -1,0 +1,74 @@
+# CSVPlotterXY
+
+Aplicativo **desktop** para plotagem e análise interativa de arquivos **CSV**,
+inspirado no MC PlotXY. Feito em Python com PySide6 + PyQtGraph — leve, rápido
+e fluido, com navegação estilo Desmos.
+
+![CSVPlotterXY](docs/screenshot.png)
+
+## Recursos
+
+- **Projeto multi-arquivo**: carregue vários CSVs; plote séries de arquivos
+  diferentes no mesmo gráfico. Cada coluna vira uma série; cada arquivo expõe
+  também a série `index` (número da linha).
+- **Seleção de eixos**: qualquer série como X, quaisquer séries como Y.
+- **Séries personalizadas por expressão**: crie séries com `+ - * / **`,
+  `abs()`, `sqrt()`, parênteses e o operador **`D()`** (derivada em relação ao
+  eixo X). Avaliador seguro por AST (sem `eval`).
+- **Cursores**: vertical e horizontal, arrastáveis, exibindo **todas** as
+  interseções com cada série; painel lateral por cursor; opção de restringir o
+  movimento aos pontos originais.
+- **Janela Medidas**: selecione um intervalo (campos A/B ou mouse, sincronizados)
+  e veja Máx, Mín, Média, ΔX, ΔY e Área por série.
+- **Navegação**: zoom/pan ilimitados sem distorção; zoom independente por eixo
+  (scroll sobre o eixo); painel de zoom local; escala manual dos eixos; "Ir para".
+- **Visual**: temas claro/escuro, eixos de origem destacados, tooltip de ponto
+  ao clicar na curva (interpolado), cor de série editável.
+- **Desempenho**: decimação min/max ciente da vista — navegação fluida com
+  séries de até ~1.000.000 de pontos, preservando o envelope exato.
+
+## Download (Windows)
+
+Baixe o `CSVPlotterXY.exe` mais recente na página de
+**[Releases](https://github.com/Lucas4964/PLOTXY_PYTHON/releases)**. É um único
+executável, não precisa instalar Python nem dependências.
+
+> Como o executável não é assinado digitalmente, o Windows SmartScreen pode
+> exibir um aviso na primeira execução. Clique em **Mais informações → Executar
+> assim mesmo**.
+
+## Rodar a partir do código-fonte
+
+```powershell
+git clone https://github.com/Lucas4964/PLOTXY_PYTHON.git
+cd PLOTXY_PYTHON
+py -3 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m plotxy_app "Data sets\Bouncing.csv"
+```
+
+(Requer Python 3.11+.)
+
+## Compilar o executável
+
+```powershell
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m PyInstaller packaging\CSVPlotterXY.spec
+```
+
+O `CSVPlotterXY.exe` é gerado em `dist\`. O ícone (`packaging/icon.ico`) já vem
+pronto; para regenerá-lo, rode `python packaging\make_icon.py`.
+
+Cada tag `v*` enviada ao GitHub dispara o workflow em
+[`.github/workflows/build.yml`](.github/workflows/build.yml), que roda os testes,
+compila o `.exe` e o anexa à Release automaticamente.
+
+## Testes
+
+```powershell
+.venv\Scripts\python -m pytest -q
+```
+
+## Licença
+
+[MIT](LICENSE) © 2026 Lucas Maximus.

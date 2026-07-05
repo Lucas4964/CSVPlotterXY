@@ -29,9 +29,9 @@ from .themes import THEMES, apply_app_theme
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"PlotXY-Py {__version__}")
+        self.setWindowTitle(f"CSVPlotterXY {__version__}")
         self.resize(1280, 760)
-        self._settings = QSettings("PlotXYPy", "PlotXYPy")
+        self._settings = QSettings("CSVPlotterXY", "CSVPlotterXY")
         self._project = Project()
         self._theme = THEMES.get(
             str(self._settings.value("theme", "dark")), THEMES["dark"])

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "csvplotterxy"
+description = "Aplicativo desktop para plotagem interativa de arquivos CSV, inspirado no MC PlotXY."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Lucas Maximus", email = "lucasdifelipe@gmail.com" }]
+keywords = ["csv", "plotting", "pyqtgraph", "pyside6", "data-analysis"]
+dynamic = ["version"]
+dependencies = [
+    "PySide6>=6.8",
+    "pyqtgraph>=0.13.7",
+    "numpy>=2.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/Lucas4964/PLOTXY_PYTHON"
+Repository = "https://github.com/Lucas4964/PLOTXY_PYTHON"
+
+[project.gui-scripts]
+csvplotterxy = "plotxy_app.__main__:main"
+
+[tool.setuptools]
+packages = ["plotxy_app"]
+
+[tool.setuptools.dynamic]
+version = { attr = "plotxy_app.__version__" }
