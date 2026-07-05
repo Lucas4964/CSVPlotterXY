@@ -340,7 +340,7 @@ class MainWindow(QMainWindow):
 
     def _open_axis_popup(self) -> None:
         def prepare():
-            self._axis.set_ranges(*self._plot.view_ranges())
+            self._axis.set_ranges(*self._plot.view_ranges(), force=True)
         self._toggle_popup(self._axis, self._scale_btn, prepare)
 
     def _open_cursor_popup(self) -> None:

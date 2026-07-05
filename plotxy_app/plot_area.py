@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QColorDialog, QSplitter, QVBoxLayout, QWidget
 
+from .decimate import decimate_minmax
 from .measures import compute_measures
 from .themes import Theme
 
@@ -88,7 +89,26 @@ class PlotArea(QWidget):
         self._snap_to_samples = False    # restrict cursor motion to samples
         self._measure_positioned = False  # measures region placed once, persists
         self._y_bounds: tuple[float, float] | None = None
+        self._y_union_sorted: np.ndarray | None = None  # lazy, for h-snap
         self._syncing = False  # guard: region <-> zoom-panel feedback loop
+        # rendering pipeline: curves display a view-aware min/max-decimated
+        # subset of the data (visually identical); refreshed at most once
+        # per event-loop tick
+        self._display_state: dict = {}
+        self._display_timer = QTimer(self)
+        self._display_timer.setSingleShot(True)
+        self._display_timer.setInterval(0)
+        self._display_timer.timeout.connect(self._refresh_display)
+        # cursor drags coalesce the same way: queued mouse moves collapse
+        # into one readout recomputation per event-loop tick
+        self._vcursor_timer = QTimer(self)
+        self._vcursor_timer.setSingleShot(True)
+        self._vcursor_timer.setInterval(0)
+        self._vcursor_timer.timeout.connect(self._on_v_cursor_moved)
+        self._hcursor_timer = QTimer(self)
+        self._hcursor_timer.setSingleShot(True)
+        self._hcursor_timer.setInterval(0)
+        self._hcursor_timer.timeout.connect(self._on_h_cursor_moved)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -112,7 +132,8 @@ class PlotArea(QWidget):
 
         self._cursor = pg.InfiniteLine(angle=90, movable=True)
         self._cursor.setZValue(90)
-        self._cursor.sigPositionChanged.connect(self._on_v_cursor_moved)
+        self._cursor.sigPositionChanged.connect(
+            lambda: self._vcursor_timer.start())
         self._pw.addItem(self._cursor)
         self._cursor.hide()
 
@@ -122,7 +143,8 @@ class PlotArea(QWidget):
 
         self._hcursor = pg.InfiniteLine(angle=0, movable=True)
         self._hcursor.setZValue(90)
-        self._hcursor.sigPositionChanged.connect(self._on_h_cursor_moved)
+        self._hcursor.sigPositionChanged.connect(
+            lambda: self._hcursor_timer.start())
         self._pw.addItem(self._hcursor)
         self._hcursor.hide()
 
@@ -143,6 +165,9 @@ class PlotArea(QWidget):
         # keep axis-scale fields in sync with mouse zoom/pan
         self._plot_item.getViewBox().sigRangeChanged.connect(
             self._on_view_range_changed)
+        # re-decimate the displayed data when the view changes
+        self._plot_item.getViewBox().sigXRangeChanged.connect(
+            self._schedule_display_refresh)
 
         # zoom region on the main plot
         self._region = pg.LinearRegionItem(movable=True)
@@ -175,6 +200,7 @@ class PlotArea(QWidget):
         zoom_vb.enableAutoRange(y=True)
         zoom_vb.setAutoVisible(y=True)
         zoom_vb.sigXRangeChanged.connect(self._on_zoom_range_changed)
+        zoom_vb.sigXRangeChanged.connect(self._schedule_display_refresh)
         self._splitter.addWidget(self._zoom_pw)
         self._zoom_pw.hide()
         self._splitter.setSizes([3000, 1000])
@@ -205,37 +231,42 @@ class PlotArea(QWidget):
                     # label changed (e.g. became qualified) -> recreate
                     self._remove_curve(key)
                 else:
-                    # data may have changed (edited custom series)
-                    self._curves[key].setData(x, y, connect="finite")
-                    self._zoom_curves[key].setData(x, y, connect="finite")
-                    continue
+                    continue  # display refresh below re-uploads if needed
             self._labels[key] = label
             color = (self._color_override.get(key)
                      or palette[len(self._color_of) % len(palette)])
             self._color_of[key] = color
             pen = pg.mkPen(color, width=2)
-            # no auto-downsampling: pyqtgraph's "peak" mode collapses to an
-            # empty path at extreme zoom-out, making the curve vanish;
-            # clipToView keeps extreme zoom-IN cheap and correct
-            curve = self._pw.plot(x, y, pen=pen, name=label, connect="finite")
-            curve.setClipToView(True)
+            # curves are created empty: they only ever display the
+            # view-aware min/max-decimated subset (see _refresh_display),
+            # so uploads and repaints stay bounded regardless of data size
+            curve = self._pw.plot(pen=pen, name=label, connect="finite")
             self._curves[key] = curve
-            zcurve = self._zoom_pw.plot(x, y, pen=pen, connect="finite")
+            zcurve = self._zoom_pw.plot(pen=pen, connect="finite")
             self._zoom_curves[key] = zcurve
         for key in list(self._ys):
             if key not in wanted:
                 del self._ys[key]
+
+        # data/selection changed: force a fresh upload for every curve
+        self._display_state.clear()
+        self._y_union_sorted = None
 
         if x_changed:
             xmin, xmax = float(np.nanmin(x)), float(np.nanmax(x))
             self._cursor.setBounds((xmin, xmax))
             self._cursor.setValue((xmin + xmax) / 2)
             self._reset_region()
+            # upload the full-range envelope first so autoRange sees the
+            # true data bounds (min/max decimation preserves them exactly)
+            self._refresh_display(full=True)
             self._pw.autoRange()
             # new X domain: re-seat the measures region on next show (or now)
             self._measure_positioned = False
             if self._measure_region.isVisible():
                 self.set_measure_region_visible(True)
+        else:
+            self._refresh_display()
         self._update_hcursor_bounds(reset=x_changed)
 
         self._clear_tooltip()
@@ -261,13 +292,94 @@ class PlotArea(QWidget):
         self._measure_region.hide()
         self._measure_positioned = False
         self._y_bounds = None
+        self._y_union_sorted = None
+        self._display_state.clear()
         self._clear_tooltip()
         self.v_cursor_moved.emit(float("nan"), [])
         self.h_cursor_moved.emit(float("nan"), [])
 
     def autorange(self) -> None:
+        # make sure the curves hold the full-range envelope before asking
+        # the ViewBox for the data bounds (they match the full data)
+        self._refresh_display(full=True)
         self._pw.getViewBox().enableAutoRange(x=True, y=True)
         self._pw.autoRange()
+
+    # ------------------------------------------------ display decimation
+
+    def _schedule_display_refresh(self) -> None:
+        """Coalesce view changes: re-decimate at most once per event-loop
+        tick, never per mouse-move pixel."""
+        if not self._display_timer.isActive():
+            self._display_timer.start()
+
+    def _refresh_display(self, full: bool = False) -> None:
+        """Upload the view-aware decimated arrays to every curve whose
+        display window changed. All analysis code keeps using the full
+        arrays; only what the renderer sees is reduced."""
+        if self._x is None or not self._curves:
+            return
+        vb = self._plot_item.getViewBox()
+        # one bucket per pixel column -> min/max picks give exactly the
+        # 2 points per column the rasterizer needs for a full envelope
+        buckets = min(4096, max(256, int(vb.width()) or 1))
+        if full:
+            view = None
+        else:
+            (x0, x1), _ = vb.viewRange()
+            view = (float(x0), float(x1))
+        for key, curve in self._curves.items():
+            xd, yd, state = self._display_data(self._ys[key], view, buckets)
+            if self._display_state.get(key) != state:
+                self._display_state[key] = state
+                curve.setData(xd, yd, connect="finite")
+
+        if self._zoom_pw.isVisible():
+            zvb = self._zoom_item.getViewBox()
+            zbuckets = min(4096, max(256, int(zvb.width()) or 1))
+            (zx0, zx1), _ = zvb.viewRange()
+            zview = (float(zx0), float(zx1))
+            for key, zcurve in self._zoom_curves.items():
+                xd, yd, state = self._display_data(
+                    self._ys[key], zview, zbuckets)
+                zkey = ("z", key)
+                if self._display_state.get(zkey) != state:
+                    self._display_state[zkey] = state
+                    zcurve.setData(xd, yd, connect="finite")
+
+    def _display_data(self, y: np.ndarray,
+                      view: tuple[float, float] | None, buckets: int):
+        """Arrays to render for the given X view (None = full range),
+        plus a cheap identity for change detection."""
+        x = self._x
+        n = len(x)
+        if self._x_kind == _NON_MONOTONIC:
+            # phase-plot style data: no safe X ordering to slice by;
+            # render as-is (previous behavior)
+            return x, y, ("nm", n)
+        if self._x_kind == _INCREASING:
+            xs, ys, rev = x, y, False
+        else:
+            xs, ys, rev = self._x_sorted, y[::-1], True
+        if view is None:
+            i0, i1 = 0, n
+        else:
+            lo, hi = view if view[0] <= view[1] else (view[1], view[0])
+            i0 = int(np.searchsorted(xs, lo, side="left"))
+            i1 = int(np.searchsorted(xs, hi, side="right"))
+            # one-point margin so segments extend past the view edges
+            i0 = max(0, i0 - 1)
+            i1 = min(n, i1 + 1)
+            if i1 - i0 < 2 and n >= 2:
+                # view between two samples or beyond the data: keep the
+                # nearest segment so the curve never vanishes
+                i0 = max(0, min(i0, n - 2))
+                i1 = min(n, i0 + 2)
+        xd, yd = decimate_minmax(xs, ys, i0, i1, buckets)
+        if rev:
+            xd = xd[::-1]
+            yd = yd[::-1]
+        return xd, yd, (i0, i1, buckets, view is None)
 
     # -------------------------------------------------------- axis scaling
 
@@ -320,13 +432,18 @@ class PlotArea(QWidget):
             self._on_h_cursor_moved()
 
     def _update_hcursor_bounds(self, reset: bool) -> None:
-        finite = [y[np.isfinite(y)] for y in self._ys.values()
-                  if np.any(np.isfinite(y))]
-        if not finite:
+        # per-series nan-aware reductions: no O(total-n) concatenation
+        ymin = ymax = None
+        with np.errstate(invalid="ignore"):
+            for y in self._ys.values():
+                if not np.any(np.isfinite(y)):
+                    continue
+                lo, hi = float(np.nanmin(y)), float(np.nanmax(y))
+                ymin = lo if ymin is None else min(ymin, lo)
+                ymax = hi if ymax is None else max(ymax, hi)
+        if ymin is None:
             self._y_bounds = None
             return
-        stacked = np.concatenate(finite)
-        ymin, ymax = float(stacked.min()), float(stacked.max())
         self._y_bounds = (ymin, ymax)
         self._hcursor.setBounds((ymin, ymax))
         cur = float(self._hcursor.value())
@@ -338,6 +455,7 @@ class PlotArea(QWidget):
         self._region.setVisible(visible and self._x is not None)
         if visible and self._x is not None:
             self._reset_region()
+            self._schedule_display_refresh()  # fill the zoom twins
 
     # ------------------------------------------------------------ measures
 
@@ -451,6 +569,8 @@ class PlotArea(QWidget):
             self._zoom_pw.removeItem(zcurve)
         self._color_of.pop(key, None)
         self._labels.pop(key, None)
+        self._display_state.pop(key, None)
+        self._display_state.pop(("z", key), None)
         # note: _color_override is intentionally kept so a re-checked
         # series keeps its user-picked color
 
@@ -657,20 +777,51 @@ class PlotArea(QWidget):
         self._on_h_cursor_moved()
 
     def _y_samples(self) -> np.ndarray | None:
-        finite = [y[np.isfinite(y)] for y in self._ys.values()
-                  if np.any(np.isfinite(y))]
-        return np.concatenate(finite) if finite else None
+        """Sorted union of all plotted finite Y samples, built lazily and
+        cached until the selection changes (used only by h-cursor snap)."""
+        if self._y_union_sorted is None:
+            finite = [y[np.isfinite(y)] for y in self._ys.values()
+                      if np.any(np.isfinite(y))]
+            if not finite:
+                return None
+            self._y_union_sorted = np.sort(np.concatenate(finite))
+        return self._y_union_sorted
+
+    def _snap_target(self, line: pg.InfiniteLine) -> np.ndarray | None:
+        """Sorted sample array a cursor line snaps to, or None."""
+        if line is self._cursor:
+            if self._x_kind == _NON_MONOTONIC or self._x_sorted is None:
+                return None  # handled by the O(n) fallback below
+            return self._x_sorted
+        return self._y_samples()
 
     def _maybe_snap(self, line: pg.InfiniteLine,
-                    samples: np.ndarray | None) -> float:
+                    fallback_samples: np.ndarray | None) -> float:
         """Return the cursor value, snapped to the nearest sample when
-        snapping is on. Updates the line without re-triggering its signal."""
+        snapping is on. Sorted targets use an O(log n) searchsorted;
+        non-monotonic X falls back to the O(n) scan. Updates the line
+        without re-triggering its signal."""
         value = float(line.value())
-        if not self._snap_to_samples or samples is None or len(samples) == 0:
+        if not self._snap_to_samples:
             return value
-        with np.errstate(invalid="ignore"):
-            idx = int(np.nanargmin(np.abs(samples - value)))
-        snapped = float(samples[idx])
+        sorted_samples = self._snap_target(line)
+        if sorted_samples is not None and len(sorted_samples):
+            i = int(np.searchsorted(sorted_samples, value))
+            best = None
+            for j in (i - 1, i):
+                if 0 <= j < len(sorted_samples):
+                    s = float(sorted_samples[j])
+                    if np.isfinite(s) and (best is None
+                                           or abs(s - value) < abs(best - value)):
+                        best = s
+            snapped = best if best is not None else value
+        else:
+            samples = fallback_samples
+            if samples is None or len(samples) == 0:
+                return value
+            with np.errstate(invalid="ignore"):
+                idx = int(np.nanargmin(np.abs(samples - value)))
+            snapped = float(samples[idx])
         if snapped != value:
             line.blockSignals(True)
             line.setValue(snapped)
@@ -710,7 +861,7 @@ class PlotArea(QWidget):
             self._h_markers.setData([])
             self.h_cursor_moved.emit(float("nan"), [])
             return
-        cy = self._maybe_snap(self._hcursor, self._y_samples())
+        cy = self._maybe_snap(self._hcursor, None)
         spots, rows = [], []
         for key in self._curves:
             color = self._color_of[key]

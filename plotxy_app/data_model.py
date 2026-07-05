@@ -109,5 +109,7 @@ def load_csv(path: str) -> DataSet:
             "O arquivo precisa de pelo menos 2 colunas numéricas "
             "(uma para o eixo X e uma para o eixo Y).")
 
-    return DataSet(names=names, columns=np.ascontiguousarray(data, dtype=np.float64),
+    # Fortran (column-major) order: each column() view is contiguous in
+    # memory, so per-series vectorized ops avoid strided access/copies
+    return DataSet(names=names, columns=np.asfortranarray(data, dtype=np.float64),
                    source_path=path, dropped_columns=dropped)

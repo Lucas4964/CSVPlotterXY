@@ -240,6 +240,10 @@ def test_axis_range_set_and_sync(win, app):
     # use a fine-grained X (time) so a 0.3-wide window is allowed
     win._panel.set_x_ref(SeriesRef("column", file_ids(win)[0], "time"))
     app.processEvents()
+    # fields sync live only while the popup is open (hidden panels skip
+    # the per-frame updates); open it as the user would
+    win._open_axis_popup()
+    app.processEvents()
     win._plot.set_x_range(0.2, 0.5)
     win._plot.set_y_range(0.0, 9.0)
     app.processEvents()
@@ -249,6 +253,8 @@ def test_axis_range_set_and_sync(win, app):
     # axis-panel fields reflect the view via view_range_changed
     assert abs(float(win._axis._fields["xmin"].text()) - 0.2) < 1e-3
     assert abs(float(win._axis._fields["xmax"].text()) - 0.5) < 1e-3
+    win._axis.hide()
+    app.processEvents()
 
 
 def test_axis_panel_apply_and_invalid(win, app):
@@ -476,6 +482,48 @@ def test_cursor_menu_defaults_and_toggle(win, app):
     win._cursor_menu._v_check.setChecked(True)
     win._cursor_menu._h_check.setChecked(False)
     app.processEvents()
+
+
+def test_display_decimation_large_series(app):
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.resize(900, 500)
+    pa.show()
+    app.processEvents()
+    n = 500_000
+    x = np.linspace(0.0, 100.0, n)
+    y = np.sin(x * 4) * np.linspace(1, 3, n)
+    pa.set_series("k", "x", x, [("s", "s", y)])
+    app.processEvents()
+    curve = pa._curves["s"]
+    xd, yd = curve.getData()
+    # the renderer sees a bounded, envelope-faithful subset...
+    assert len(xd) <= 2 * 4096 + 4
+    assert xd[0] == x[0] and xd[-1] == x[-1]
+    assert yd.max() == y.max() and yd.min() == y.min()
+    # ...while analysis still uses the full arrays
+    assert len(pa._ys["s"]) == n
+
+    # narrow zoom-in -> exact raw slice of the original data
+    pa.set_x_range(50.0, 50.001)
+    app.processEvents()
+    xd2, _ = curve.getData()
+    i0 = np.searchsorted(x, 50.0) - 1
+    i1 = np.searchsorted(x, 50.001, side="right") + 1
+    assert np.array_equal(xd2, x[max(0, i0):i1])
+
+    # extreme zoom-out never loses the curve
+    pa.set_x_range(-1e6, 1e6)
+    app.processEvents()
+    assert curve.curve.getPath().elementCount() > 0
+
+    # autorange restores the full-data view (envelope keeps true bounds)
+    pa.autorange()
+    app.processEvents()
+    x0, x1, y0, y1 = pa.view_ranges()
+    assert x0 <= x[0] and x1 >= x[-1]
+    assert y0 <= y.min() and y1 >= y.max()
+    pa.hide()
 
 
 def test_cursor_snap_to_samples(app):

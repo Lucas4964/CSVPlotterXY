@@ -66,9 +66,14 @@ class AxisPanel(QWidget):
         layout.addWidget(box)
 
     def set_ranges(self, xmin: float, xmax: float,
-                   ymin: float, ymax: float) -> None:
+                   ymin: float, ymax: float, force: bool = False) -> None:
         """Reflect the current view. Skips any field being edited so the
-        user's typing isn't clobbered by live mouse updates."""
+        user's typing isn't clobbered by live mouse updates. While the
+        popup is hidden the update is skipped entirely (the open handler
+        refreshes with force=True), avoiding widget churn on every
+        pan/zoom frame."""
+        if not force and not self.isVisible():
+            return
         values = {"xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax}
         for key, edit in self._fields.items():
             if edit.hasFocus():
