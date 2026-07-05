@@ -1024,3 +1024,156 @@ def test_goto_panel_fields_and_validation(win, app):
     win._cursor_menu._h_check.setChecked(False)
     app.processEvents()
     assert not goto._y_edit.isEnabled() and not goto._go_y_btn.isEnabled()
+
+
+def _bring_plot(app):
+    """A shown PlotArea with a known series and a fixed, padded view range so
+    view<->scene mapping is deterministic. Data: x in [0,4], y in [0,40]."""
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.resize(600, 400)
+    pa.show()
+    app.processEvents()
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y = np.array([0.0, 10.0, 20.0, 30.0, 40.0])
+    pa.set_series("k", "x", x, [("s", "s", y)])
+    vb = pa._plot_item.getViewBox()
+    vb.setRange(xRange=(-0.5, 4.5), yRange=(-5.0, 45.0), padding=0)
+    app.processEvents()
+    return pa, vb
+
+
+def _scene_at(vb, x, y):
+    return vb.mapViewToScene(QPointF(x, y))
+
+
+def test_bring_cursor_x_moves_vertical(app):
+    pa, vb = _bring_plot(app)
+    pa._menu_scene_pos = _scene_at(vb, 2.0, 20.0)
+    pa._bring_cursor("v")
+    app.processEvents()
+    assert abs(pa._cursor.value() - 2.0) < 1e-6
+    pa.hide()
+
+
+def test_bring_cursor_y_enables_and_positions(app):
+    pa, vb = _bring_plot(app)
+    captured = []
+    pa.cursors_enabled_changed.connect(lambda v, h: captured.append((v, h)))
+    assert not pa._h_enabled  # horizontal cursor off by default
+    pa._menu_scene_pos = _scene_at(vb, 2.0, 20.0)
+    pa._bring_cursor("h")
+    app.processEvents()
+    assert pa._h_enabled  # turned on
+    assert abs(pa._hcursor.value() - 20.0) < 1e-6
+    assert captured and captured[-1] == (True, True)
+    pa.hide()
+
+
+def test_bring_cursor_respects_bounds_and_snap(app):
+    pa, vb = _bring_plot(app)
+    # click beyond the data's X max (4.0) but still inside the padded view ->
+    # set_cursor_x clamps to the cursor bound
+    pa._menu_scene_pos = _scene_at(vb, 4.25, 20.0)
+    pa._bring_cursor("v")
+    app.processEvents()
+    assert abs(pa._cursor.value() - 4.0) < 1e-6
+    # with snapping on, the cursor lands on the nearest original sample
+    pa.set_cursor_snap(True)
+    pa._menu_scene_pos = _scene_at(vb, 1.4, 20.0)
+    pa._bring_cursor("v")
+    app.processEvents()
+    assert abs(pa._cursor.value() - 1.0) < 1e-6
+    pa.hide()
+
+
+def test_bring_cursor_outside_viewbox_ignored(app):
+    pa, vb = _bring_plot(app)
+    before = pa._cursor.value()
+    pa._menu_scene_pos = QPointF(-10000.0, -10000.0)  # nowhere near the plot
+    pa._bring_cursor("v")
+    app.processEvents()
+    assert pa._cursor.value() == before
+    pa.hide()
+
+
+def test_adaptive_antialias_dense_vs_smooth(app):
+    # dense spiky data (envelope zigzagging the full view height) must
+    # render without AA — that's what keeps high-density regions fluid —
+    # while smooth curves keep AA untouched
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.resize(900, 600)
+    pa.show()
+    app.processEvents()
+    n = 35_000
+    x = np.linspace(0.0, 8600.0, n)
+    grass = np.where(np.arange(n) % 2, 400.0, -50.0).astype(np.float64)
+    pa.set_series("k", "x", x, [("g", "g", grass)])
+    vb = pa._plot_item.getViewBox()
+    vb.setRange(xRange=(-500.0, 10500.0), yRange=(-100.0, 500.0), padding=0)
+    app.processEvents()
+    assert pa._curves["g"].opts["antialias"] is False
+
+    smooth = 200.0 + 150.0 * np.sin(x / 600.0)
+    pa.set_series("k", "x", x, [("s", "s", smooth)])
+    vb.setRange(xRange=(-500.0, 10500.0), yRange=(-50.0, 400.0), padding=0)
+    app.processEvents()
+    assert pa._curves["s"].opts["antialias"] is True
+    pa.hide()
+
+
+def test_adaptive_antialias_restores_on_zoom_in(app):
+    # zooming into a dense region until few points remain on screen makes
+    # the stroke short again -> AA comes back (adaptive both ways)
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.resize(900, 600)
+    pa.show()
+    app.processEvents()
+    n = 35_000
+    x = np.linspace(0.0, 8600.0, n)
+    grass = np.where(np.arange(n) % 2, 400.0, -50.0).astype(np.float64)
+    pa.set_series("k", "x", x, [("g", "g", grass)])
+    vb = pa._plot_item.getViewBox()
+    vb.setRange(xRange=(-500.0, 10500.0), yRange=(-100.0, 500.0), padding=0)
+    app.processEvents()
+    assert pa._curves["g"].opts["antialias"] is False
+    # ~8 samples in view: short stroke, AA on again
+    vb.setXRange(1000.0, 1002.0, padding=0)
+    app.processEvents()
+    assert pa._curves["g"].opts["antialias"] is True
+    pa.hide()
+
+
+def test_bring_actions_enabled_only_with_data(app):
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa._sync_bring_actions()
+    assert not pa._act_bring_x.isEnabled()
+    assert not pa._act_bring_y.isEnabled()
+    x = np.array([0.0, 1.0, 2.0])
+    pa.set_series("k", "x", x, [("s", "s", x * 10)])
+    pa._sync_bring_actions()
+    assert pa._act_bring_x.isEnabled()
+    assert pa._act_bring_y.isEnabled()
+
+
+def test_bring_cursor_y_syncs_cursor_menu(win, app):
+    # integration: bringing a hidden cursor through the plot ticks the
+    # Cursores checkbox and reveals the readout panel
+    assert not win._plot._h_enabled
+    assert not win._cursor_menu._h_check.isChecked()
+    vb = win._plot._plot_item.getViewBox()
+    xr, yr = vb.viewRange()
+    cx = (xr[0] + xr[1]) / 2
+    cy = (yr[0] + yr[1]) / 2
+    win._plot._menu_scene_pos = vb.mapViewToScene(QPointF(cx, cy))
+    win._plot._bring_cursor("h")
+    app.processEvents()
+    assert win._plot._h_enabled
+    assert win._cursor_menu._h_check.isChecked()
+    assert win._h_readout.isVisible()
+    # restore default
+    win._cursor_menu._h_check.setChecked(False)
+    app.processEvents()

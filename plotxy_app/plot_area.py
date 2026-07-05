@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import QColorDialog, QSplitter, QVBoxLayout, QWidget
 
 from .decimate import decimate_minmax
@@ -16,6 +16,17 @@ from .themes import Theme
 pg.setConfigOptions(antialias=True)
 
 _INCREASING, _DECREASING, _NON_MONOTONIC = 0, 1, 2
+
+# Maximum estimated on-screen polyline length (device px) up to which a
+# curve keeps antialiasing. Dense spiky data decimates to an envelope that
+# zigzags the full column height at every pixel column — with AA on, Qt's
+# path stroker cost grows superlinearly with stroked length (measured on
+# a 900x600 view: ~55 ms/frame at 25k px, ~330 ms at 96k px, ~3.3 s at
+# 400k px; without AA it stays flat at ~10-17 ms). Above this limit the
+# curve is drawn without AA, which is visually indistinguishable for such
+# dense strokes and unlocks pyqtgraph's fast drawLines segment path
+# (_shouldUseDrawLineSegments). Smooth curves measure ~2-4k px and keep AA.
+_AA_MAX_STROKE_PX = 10_000
 
 
 class _CrispInfiniteLine(pg.InfiniteLine):
@@ -84,6 +95,9 @@ class PlotArea(QWidget):
 
     v_cursor_moved = Signal(float, list)
     h_cursor_moved = Signal(float, list)
+    # emitted when a right-click "Trazer cursor" turns on a hidden cursor, so
+    # the toolbar's Cursores menu / readout panels can sync their state
+    cursors_enabled_changed = Signal(bool, bool)
     view_range_changed = Signal(float, float, float, float)
     measure_region_changed = Signal(float, float)   # on release (recompute)
     measure_region_changing = Signal(float, float)   # live during drag
@@ -106,6 +120,7 @@ class PlotArea(QWidget):
         self._click_interpolate = True   # click-tooltip: interpolate by default
         self._snap_to_samples = False    # restrict cursor motion to samples
         self._measure_positioned = False  # measures region placed once, persists
+        self._menu_scene_pos = None  # last right-click, for "Trazer cursor"
         self._y_bounds: tuple[float, float] | None = None
         self._y_union_sorted: np.ndarray | None = None  # lazy, for h-snap
         self._syncing = False  # guard: region <-> zoom-panel feedback loop
@@ -180,11 +195,29 @@ class PlotArea(QWidget):
         self._click_label.hide()
         self._pw.scene().sigMouseClicked.connect(self._on_scene_clicked)
 
+        # right-click context menu: two extra items that bring the vertical /
+        # horizontal cursor to the clicked point. Appended to the ViewBox's
+        # native menu (popup is non-blocking, and sigMouseClicked fires right
+        # after, so _menu_scene_pos is set before an action can be chosen).
+        vb_menu = self._plot_item.getViewBox().menu
+        vb_menu.addSeparator()
+        self._act_bring_x = QAction("Trazer cursor X", vb_menu)
+        self._act_bring_x.triggered.connect(lambda: self._bring_cursor("v"))
+        vb_menu.addAction(self._act_bring_x)
+        self._act_bring_y = QAction("Trazer cursor Y", vb_menu)
+        self._act_bring_y.triggered.connect(lambda: self._bring_cursor("h"))
+        vb_menu.addAction(self._act_bring_y)
+        vb_menu.aboutToShow.connect(self._sync_bring_actions)
+
         # keep axis-scale fields in sync with mouse zoom/pan
         self._plot_item.getViewBox().sigRangeChanged.connect(
             self._on_view_range_changed)
-        # re-decimate the displayed data when the view changes
+        # re-decimate the displayed data when the view changes; Y matters
+        # too: the antialias decision depends on the on-screen (pixel)
+        # length of the displayed polyline
         self._plot_item.getViewBox().sigXRangeChanged.connect(
+            self._schedule_display_refresh)
+        self._plot_item.getViewBox().sigYRangeChanged.connect(
             self._schedule_display_refresh)
 
         # zoom region on the main plot
@@ -222,6 +255,7 @@ class PlotArea(QWidget):
         zoom_vb.setAutoVisible(y=True)
         zoom_vb.sigXRangeChanged.connect(self._on_zoom_range_changed)
         zoom_vb.sigXRangeChanged.connect(self._schedule_display_refresh)
+        zoom_vb.sigYRangeChanged.connect(self._schedule_display_refresh)
         self._splitter.addWidget(self._zoom_pw)
         self._zoom_pw.hide()
         self._splitter.setSizes([3000, 1000])
@@ -351,9 +385,11 @@ class PlotArea(QWidget):
             view = (float(x0), float(x1))
         for key, curve in self._curves.items():
             xd, yd, state = self._display_data(self._ys[key], view, buckets)
+            aa = self._display_antialias(xd, yd, vb)
+            state = state + (aa,)
             if self._display_state.get(key) != state:
                 self._display_state[key] = state
-                curve.setData(xd, yd, connect="finite")
+                curve.setData(xd, yd, connect="finite", antialias=aa)
 
         if self._zoom_pw.isVisible():
             zvb = self._zoom_item.getViewBox()
@@ -363,10 +399,38 @@ class PlotArea(QWidget):
             for key, zcurve in self._zoom_curves.items():
                 xd, yd, state = self._display_data(
                     self._ys[key], zview, zbuckets)
+                aa = self._display_antialias(xd, yd, zvb)
                 zkey = ("z", key)
+                state = state + (aa,)
                 if self._display_state.get(zkey) != state:
                     self._display_state[zkey] = state
-                    zcurve.setData(xd, yd, connect="finite")
+                    zcurve.setData(xd, yd, connect="finite", antialias=aa)
+
+    def _display_antialias(self, xd: np.ndarray, yd: np.ndarray,
+                           vb) -> bool:
+        """Antialias decision for one uploaded curve: keep AA while the
+        estimated on-screen path length stays under _AA_MAX_STROKE_PX.
+        Dense envelopes (spiky data) exceed it by orders of magnitude and
+        render without AA — visually identical for near-vertical strokes,
+        and vastly cheaper to rasterize."""
+        if len(xd) < 2:
+            return True
+        # px-per-unit from view range + geometry (avoids viewPixelSize(),
+        # whose transform inversion warns on degenerate/tiny viewboxes)
+        (x0, x1), (y0, y1) = vb.viewRange()
+        w, h = float(vb.width()), float(vb.height())
+        sx, sy = float(x1) - float(x0), float(y1) - float(y0)
+        if (w <= 0 or h <= 0 or sx <= 0 or sy <= 0
+                or not np.isfinite(sx) or not np.isfinite(sy)):
+            return True
+        dx = np.diff(xd)
+        dy = np.diff(yd)
+        m = np.isfinite(dx) & np.isfinite(dy)
+        if not m.any():
+            return True
+        px = (float(np.abs(dx[m]).sum()) * (w / sx)
+              + float(np.abs(dy[m]).sum()) * (h / sy))
+        return px <= _AA_MAX_STROKE_PX
 
     def _display_data(self, y: np.ndarray,
                       view: tuple[float, float] | None, buckets: int):
@@ -434,6 +498,35 @@ class PlotArea(QWidget):
 
     def cursor_positions(self) -> tuple[float, float]:
         return float(self._cursor.value()), float(self._hcursor.value())
+
+    def _sync_bring_actions(self) -> None:
+        """Enable the context-menu cursor actions only when data is plotted."""
+        ok = self._x is not None and bool(self._curves)
+        self._act_bring_x.setEnabled(ok)
+        self._act_bring_y.setEnabled(ok)
+
+    def _bring_cursor(self, orientation: str) -> None:
+        """Move the vertical ('v') or horizontal ('h') cursor to the last
+        right-click point. A hidden cursor is turned on first (and the change
+        announced via cursors_enabled_changed). Bounds/snap are enforced by
+        set_cursor_x/set_cursor_y, so out-of-range clicks clamp to the edge."""
+        pos = self._menu_scene_pos
+        if pos is None or self._x is None or not self._curves:
+            return
+        vb = self._plot_item.getViewBox()
+        if not vb.sceneBoundingRect().contains(pos):
+            return
+        pt = vb.mapSceneToView(pos)
+        if orientation == "v":
+            if not self._v_enabled:
+                self.set_cursor_visible("v", True)
+                self.cursors_enabled_changed.emit(self._v_enabled, self._h_enabled)
+            self.set_cursor_x(pt.x())
+        else:
+            if not self._h_enabled:
+                self.set_cursor_visible("h", True)
+                self.cursors_enabled_changed.emit(self._v_enabled, self._h_enabled)
+            self.set_cursor_y(pt.y())
 
     def y_data_range(self) -> tuple[float, float] | None:
         return self._y_bounds
@@ -683,6 +776,17 @@ class PlotArea(QWidget):
     # ------------------------------------------------------ click tooltip
 
     def _on_scene_clicked(self, event) -> None:
+        # right-click: remember where, so the context-menu "Trazer cursor"
+        # actions know the target point. Runs before the isAccepted() gate
+        # below (the ViewBox already accepted the right button to raise its
+        # menu). Emitted after menu.popup(), so it's set before an action fires.
+        try:
+            right = event.button() == Qt.MouseButton.RightButton
+        except Exception:
+            right = False
+        if right:
+            self._menu_scene_pos = event.scenePos()
+            return
         if self._x is None or not self._curves:
             return
         try:

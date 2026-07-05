@@ -60,5 +60,12 @@ class CursorMenu(QWidget):
     def states(self) -> tuple[bool, bool]:
         return self._v_check.isChecked(), self._h_check.isChecked()
 
+    def set_states(self, vertical: bool, horizontal: bool) -> None:
+        """Reflect an external cursor toggle (e.g. right-click "Trazer cursor"
+        turning a hidden cursor on). setChecked only emits toggled when the
+        value actually changes, so the cursors_changed chain fires just once."""
+        self._v_check.setChecked(vertical)
+        self._h_check.setChecked(horizontal)
+
     def _emit(self, _checked: bool) -> None:
         self.cursors_changed.emit(*self.states())

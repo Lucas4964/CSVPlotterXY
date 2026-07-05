@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
         self._cursor_menu.interpolation_changed.connect(
             self._plot.set_click_interpolation)
         self._cursor_menu.snap_changed.connect(self._plot.set_cursor_snap)
+        self._plot.cursors_enabled_changed.connect(self._cursor_menu.set_states)
         self._plot.measure_region_changed.connect(self._update_measures)
         self._axis.range_changed.connect(self._on_axis_range_changed)
         self._axis.auto_requested.connect(lambda: self._plot.autorange())
