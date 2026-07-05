@@ -8,7 +8,7 @@ description = "Aplicativo desktop para plotagem interativa de arquivos CSV, insp
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Lucas Maximus", email = "lucasdifelipe@gmail.com" }]
+authors = [{ name = "Lucas Maximus" }]
 keywords = ["csv", "plotting", "pyqtgraph", "pyside6", "data-analysis"]
 dynamic = ["version"]
 dependencies = [
