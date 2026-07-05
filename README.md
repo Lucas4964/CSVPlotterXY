@@ -27,6 +27,22 @@ e fluido, com navegação estilo Desmos.
 - **Desempenho**: decimação min/max ciente da vista — navegação fluida com
   séries de até ~1.000.000 de pontos, preservando o envelope exato.
 
+## Como funciona o pareamento X/Y
+
+Cada ponto plotado é `(x[i], y[i])` — o X e o Y são combinados **pela posição
+da linha**, não pelo valor. Ou seja: 1ª linha de X com 1ª linha de Y, 2ª com
+2ª, e assim por diante. Isso vale mesmo quando X e Y vêm de **arquivos
+diferentes**: não há busca por timestamp equivalente nem interpolação entre
+arquivos, só o índice da linha.
+
+Se as séries escolhidas tiverem tamanhos diferentes, o excedente da mais longa
+é descartado (a interface avisa quando isso acontece) — o gráfico usa sempre
+`n = mínimo dos tamanhos` pontos.
+
+**Na prática:** para combinar séries de arquivos distintos, garanta que as
+linhas já estejam alinhadas (mesma taxa de amostragem, mesmo início) antes de
+carregar os CSVs.
+
 ## Download (Windows)
 
 Baixe o `CSVPlotterXY.exe` mais recente na página de
