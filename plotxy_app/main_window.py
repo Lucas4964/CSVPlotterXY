@@ -41,11 +41,11 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        open_btn = QPushButton("Adicionar CSV…")
+        open_btn = QPushButton("Adicionar CSV")
         open_btn.clicked.connect(self._open_file_dialog)
         toolbar.addWidget(open_btn)
 
-        new_series_btn = QPushButton("Nova série…")
+        new_series_btn = QPushButton("Nova série")
         new_series_btn.clicked.connect(self._on_new_series)
         toolbar.addWidget(new_series_btn)
 
@@ -66,7 +66,7 @@ class MainWindow(QMainWindow):
         self._cursors_btn.clicked.connect(self._open_cursor_popup)
         toolbar.addWidget(self._cursors_btn)
 
-        self._scale_btn = QPushButton("Escala…")
+        self._scale_btn = QPushButton("Janela")
         self._scale_btn.clicked.connect(self._open_axis_popup)
         toolbar.addWidget(self._scale_btn)
 

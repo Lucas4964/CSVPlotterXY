@@ -18,6 +18,23 @@ pg.setConfigOptions(antialias=True)
 _INCREASING, _DECREASING, _NON_MONOTONIC = 0, 1, 2
 
 
+class _CrispInfiniteLine(pg.InfiniteLine):
+    """An InfiniteLine that always renders as a hard 1px line.
+
+    With global antialiasing on, a horizontal/vertical line at a
+    fractional device-pixel position gets blended across two pixel
+    rows/columns and looks blurry; which zoom levels trigger this is
+    unpredictable since it depends on where x=0 (or y=0) lands on
+    screen. Disabling AA just for this item's paint keeps it crisp at
+    every zoom level, like the axis border."""
+
+    def paint(self, p, *args):
+        p.save()
+        p.setRenderHint(p.RenderHint.Antialiasing, False)
+        super().paint(p, *args)
+        p.restore()
+
+
 def polyline_crossings(a: np.ndarray, b: np.ndarray, level: float) -> np.ndarray:
     """All interpolated values of `b` where the polyline (a, b) crosses
     a == level, sorted ascending. Vectorized; segments containing NaN are
@@ -124,8 +141,8 @@ class PlotArea(QWidget):
 
         # origin reference lines (x=0, y=0), Desmos-style: subtly bolder
         # than the grid, always behind the data curves
-        self._origin_v = pg.InfiniteLine(pos=0, angle=90, movable=False)
-        self._origin_h = pg.InfiniteLine(pos=0, angle=0, movable=False)
+        self._origin_v = _CrispInfiniteLine(pos=0, angle=90, movable=False)
+        self._origin_h = _CrispInfiniteLine(pos=0, angle=0, movable=False)
         for line in (self._origin_v, self._origin_h):
             line.setZValue(-10)
             self._pw.addItem(line)
@@ -190,8 +207,8 @@ class PlotArea(QWidget):
         self._zoom_pw = pg.PlotWidget()
         self._zoom_item = self._zoom_pw.getPlotItem()
         self._zoom_item.showGrid(x=True, y=True, alpha=0.15)
-        self._zoom_origin_v = pg.InfiniteLine(pos=0, angle=90, movable=False)
-        self._zoom_origin_h = pg.InfiniteLine(pos=0, angle=0, movable=False)
+        self._zoom_origin_v = _CrispInfiniteLine(pos=0, angle=90, movable=False)
+        self._zoom_origin_h = _CrispInfiniteLine(pos=0, angle=0, movable=False)
         for line in (self._zoom_origin_v, self._zoom_origin_h):
             line.setZValue(-10)
             self._zoom_pw.addItem(line)
@@ -513,7 +530,7 @@ class PlotArea(QWidget):
         # and more opaque so the quadrant reference stands out subtly
         origin_color = QColor(theme.axis_color)
         origin_color.setAlpha(140)
-        origin_pen = pg.mkPen(origin_color, width=1.2)
+        origin_pen = pg.mkPen(origin_color, width=1)
         for line in (self._origin_v, self._origin_h,
                     self._zoom_origin_v, self._zoom_origin_h):
             line.setPen(origin_pen)
@@ -526,9 +543,9 @@ class PlotArea(QWidget):
             label.setText(label.text)
         self._cursor.setPen(pg.mkPen(theme.cursor_color, width=2))
         self._cursor.setHoverPen(pg.mkPen(theme.cursor_color, width=4))
-        # horizontal cursor uses the accent color for instant distinction
-        self._hcursor.setPen(pg.mkPen(theme.accent, width=2))
-        self._hcursor.setHoverPen(pg.mkPen(theme.accent, width=4))
+        # horizontal cursor matches the vertical one for a consistent look
+        self._hcursor.setPen(pg.mkPen(theme.cursor_color, width=2))
+        self._hcursor.setHoverPen(pg.mkPen(theme.cursor_color, width=4))
 
         accent = QColor(theme.accent)
         brush = QColor(accent); brush.setAlpha(40)

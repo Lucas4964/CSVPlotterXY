@@ -708,6 +708,26 @@ def test_measures_maxmin_cell_interactions(win, app):
     app.processEvents()
 
 
+def test_hcursor_matches_vcursor_color(win, app):
+    win._apply_theme()
+    assert win._plot._cursor.pen.color().name() == win._plot._hcursor.pen.color().name()
+    assert win._plot._cursor.hoverPen.color().name() == \
+        win._plot._hcursor.hoverPen.color().name()
+
+
+def test_toolbar_button_labels(win, app):
+    assert win._scale_btn.text() == "Janela"
+    for btn_text in ("Adicionar CSV", "Nova série"):
+        assert "…" not in btn_text
+
+
+def test_origin_lines_are_crisp_infinite_line(win, app):
+    from plotxy_app.plot_area import _CrispInfiniteLine
+    for line in (win._plot._origin_v, win._plot._origin_h,
+                win._plot._zoom_origin_v, win._plot._zoom_origin_h):
+        assert isinstance(line, _CrispInfiniteLine)
+
+
 def test_measures_region_uses_accent_color(win, app):
     from PySide6.QtGui import QColor
     f1 = file_ids(win)[0]
