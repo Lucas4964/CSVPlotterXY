@@ -5,6 +5,11 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# needed so action-gh-release can create/update the release and upload
+# the .exe (repos default to a read-only workflow token)
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
