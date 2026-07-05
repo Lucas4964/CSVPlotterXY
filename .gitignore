@@ -15,8 +15,8 @@ Documentation/
 README FIRST.pdf
 gmon.out
 
-# Generated performance-test data
-Data sets/big_1M.csv
+# Sample data — not distributed (third-party MC PlotXY samples + local data)
+Data sets/
 
 # PyInstaller build output
 build/

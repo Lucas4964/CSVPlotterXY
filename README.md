@@ -44,7 +44,7 @@ git clone https://github.com/Lucas4964/PLOTXY_PYTHON.git
 cd PLOTXY_PYTHON
 py -3 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m plotxy_app "Data sets\Bouncing.csv"
+.venv\Scripts\python -m plotxy_app "caminho\para\seu_arquivo.csv"
 ```
 
 (Requer Python 3.11+.)
