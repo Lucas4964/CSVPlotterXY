@@ -30,7 +30,7 @@ e fluido, com navegação estilo Desmos.
 ## Download (Windows)
 
 Baixe o `CSVPlotterXY.exe` mais recente na página de
-**[Releases](https://github.com/Lucas4964/PLOTXY_PYTHON/releases)**. É um único
+**[Releases](https://github.com/Lucas4964/CSVPlotterXY/releases)**. É um único
 executável, não precisa instalar Python nem dependências.
 
 > Como o executável não é assinado digitalmente, o Windows SmartScreen pode
@@ -40,8 +40,8 @@ executável, não precisa instalar Python nem dependências.
 ## Rodar a partir do código-fonte
 
 ```powershell
-git clone https://github.com/Lucas4964/PLOTXY_PYTHON.git
-cd PLOTXY_PYTHON
+git clone https://github.com/Lucas4964/CSVPlotterXY.git
+cd CSVPlotterXY
 py -3 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 .venv\Scripts\python -m plotxy_app "caminho\para\seu_arquivo.csv"

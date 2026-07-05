@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Lucas4964/PLOTXY_PYTHON"
-Repository = "https://github.com/Lucas4964/PLOTXY_PYTHON"
+Homepage = "https://github.com/Lucas4964/CSVPlotterXY"
+Repository = "https://github.com/Lucas4964/CSVPlotterXY"
 
 [project.gui-scripts]
 csvplotterxy = "plotxy_app.__main__:main"
