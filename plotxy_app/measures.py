@@ -11,10 +11,11 @@ import numpy as np
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QApplication, QHeaderView, QLabel, QMenu, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QApplication, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from .axis_panel import _period_validator
 from .readout_panel import _COLOR_ROLE, _SWATCH_COLUMN_WIDTH, _SwatchDelegate
 
 _INCREASING, _DECREASING, _NON_MONOTONIC = 0, 1, 2
@@ -87,6 +88,7 @@ class MeasuresWindow(QWidget):
     visibility_changed = Signal(bool)
     point_activated = Signal(str, float, float)  # (key, x, y) of a Máx/Mín cell
     goto_x_requested = Signal(float)             # move vertical cursor to X
+    interval_edited = Signal(float, float)       # user typed a valid A < B
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -104,9 +106,21 @@ class MeasuresWindow(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        self._interval_label = QLabel("")
-        self._interval_label.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self._interval_label)
+        # A/B interval fields — editable, kept in sync with the region
+        interval_row = QHBoxLayout()
+        interval_row.setSpacing(4)
+        interval_row.addWidget(QLabel("Intervalo:  A ="))
+        self._a_edit = QLineEdit()
+        self._a_edit.setValidator(_period_validator(self._a_edit))
+        self._a_edit.editingFinished.connect(self._commit_interval)
+        interval_row.addWidget(self._a_edit)
+        interval_row.addWidget(QLabel("B ="))
+        self._b_edit = QLineEdit()
+        self._b_edit.setValidator(_period_validator(self._b_edit))
+        self._b_edit.editingFinished.connect(self._commit_interval)
+        interval_row.addWidget(self._b_edit)
+        interval_row.addStretch(1)
+        layout.addLayout(interval_row)
 
         # columns: [swatch | Série | Máx | Mín | Média | ΔX | ΔY | Área]
         self._table = QTableWidget(0, 2 + len(COLUMNS))
@@ -132,10 +146,18 @@ class MeasuresWindow(QWidget):
 
     # ------------------------------------------------------------- public
 
+    def set_interval(self, lo: float, hi: float) -> None:
+        """Reflect the region interval in the A/B fields, skipping a field
+        being edited so the user's typing isn't clobbered."""
+        for edit, val in ((self._a_edit, lo), (self._b_edit, hi)):
+            if not edit.hasFocus():
+                edit.setText(f"{val:.6g}")
+                edit.setStyleSheet("")
+
     def set_rows(self, lo: float, hi: float,
                  rows: list[tuple[str, str, str, dict | None]]) -> None:
         self._rows = rows
-        self._interval_label.setText(f"X ∈ [{lo:.6g}, {hi:.6g}]")
+        self.set_interval(lo, hi)
         self._table.setRowCount(len(rows))
         for r, (_key, label, color, m) in enumerate(rows):
             color_item = QTableWidgetItem()
@@ -150,6 +172,27 @@ class MeasuresWindow(QWidget):
                 item.setTextAlignment(
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self._table.setItem(r, c, item)
+
+    def _commit_interval(self) -> None:
+        """Validate the A/B fields and, if A < B, request the new interval.
+        Programmatic set_interval never reaches here (it uses setText, not
+        editingFinished), so there is no feedback loop."""
+        try:
+            a = float(self._a_edit.text().strip())
+            b = float(self._b_edit.text().strip())
+        except ValueError:
+            self._flag_interval(True)
+            return
+        if a >= b:
+            self._flag_interval(True)
+            return
+        self._flag_interval(False)
+        self.interval_edited.emit(a, b)
+
+    def _flag_interval(self, invalid: bool) -> None:
+        style = "border: 1px solid #e74c3c;" if invalid else ""
+        self._a_edit.setStyleSheet(style)
+        self._b_edit.setStyleSheet(style)
 
     # ----------------------------------------------------- window lifecycle
 

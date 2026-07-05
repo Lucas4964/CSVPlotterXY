@@ -27,6 +27,8 @@ def _is_number(text: str) -> bool:
 
 _KEY_ROLE = Qt.ItemDataRole.UserRole
 _COLOR_ROLE = Qt.ItemDataRole.UserRole + 1
+_X_ROLE = Qt.ItemDataRole.UserRole + 2
+_Y_ROLE = Qt.ItemDataRole.UserRole + 3
 _SWATCH_SIZE = 12
 _SWATCH_COLUMN_WIDTH = 28
 _MAX_CHILDREN = 50  # crossings listed per series before "+N pontos"
@@ -61,12 +63,14 @@ class CursorReadout(QWidget):
     color swatch emits color_change_requested(key)."""
 
     color_change_requested = Signal(str)
+    point_clicked = Signal(str, float, float)  # (key, x, y) of a value cell
 
     def __init__(self, title: str, coord_symbol: str, value_symbol: str,
                  parent: QWidget | None = None):
         super().__init__(parent)
         self._title = title
         self._coord_symbol = coord_symbol
+        self._is_vertical = coord_symbol == "X"  # else horizontal cursor
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -116,11 +120,13 @@ class CursorReadout(QWidget):
                 top.setText(2, "—")
             elif len(values) == 1:
                 top.setText(2, f"{values[0]:.6g}")
+                self._tag_point(top, key, coord, values[0])
             else:
                 top.setText(2, f"{len(values)} pontos")
                 for v in values[:_MAX_CHILDREN]:
                     child = QTreeWidgetItem(["", "", f"{v:.6g}"])
                     child.setTextAlignment(2, _RIGHT)
+                    self._tag_point(child, key, coord, v)
                     top.addChild(child)
                 if len(values) > _MAX_CHILDREN:
                     more = QTreeWidgetItem(
@@ -130,12 +136,28 @@ class CursorReadout(QWidget):
             self._tree.addTopLevelItem(top)
             top.setExpanded(True)
 
+    def _tag_point(self, item: QTreeWidgetItem, key: str,
+                   coord: float, value: float) -> None:
+        """Attach the (x, y) of an intersection point to a value cell so a
+        click can show the graph tooltip. Vertical cursor: x=coord, y=value;
+        horizontal cursor: x=value, y=coord."""
+        x, y = (coord, value) if self._is_vertical else (value, coord)
+        item.setData(0, _KEY_ROLE, key)
+        item.setData(0, _X_ROLE, float(x))
+        item.setData(0, _Y_ROLE, float(y))
+
     def _on_item_clicked(self, item: QTreeWidgetItem, col: int) -> None:
-        if col != 0:
+        # clicking the color swatch (col 0 of a series row) changes color
+        if col == 0 and item.data(0, _COLOR_ROLE) is not None:
+            key = item.data(0, _KEY_ROLE)
+            if key:
+                self.color_change_requested.emit(key)
             return
-        key = item.data(0, _KEY_ROLE)
-        if key:
-            self.color_change_requested.emit(key)
+        # clicking anywhere else on a point-bearing row shows its tooltip
+        x = item.data(0, _X_ROLE)
+        y = item.data(0, _Y_ROLE)
+        if x is not None and y is not None:
+            self.point_clicked.emit(item.data(0, _KEY_ROLE), x, y)
 
     # ---------------------------------------------------- copy to clipboard
 

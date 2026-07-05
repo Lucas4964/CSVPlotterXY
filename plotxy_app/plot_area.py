@@ -85,7 +85,8 @@ class PlotArea(QWidget):
     v_cursor_moved = Signal(float, list)
     h_cursor_moved = Signal(float, list)
     view_range_changed = Signal(float, float, float, float)
-    measure_region_changed = Signal(float, float)
+    measure_region_changed = Signal(float, float)   # on release (recompute)
+    measure_region_changing = Signal(float, float)   # live during drag
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -200,6 +201,9 @@ class PlotArea(QWidget):
         self._measure_region.setZValue(75)
         self._measure_region.sigRegionChangeFinished.connect(
             self._on_measure_region_finished)
+        # live (continuous) updates during a drag sync the A/B fields only
+        self._measure_region.sigRegionChanged.connect(
+            self._on_measure_region_changing)
         self._pw.addItem(self._measure_region)
         self._measure_region.hide()
 
@@ -496,15 +500,29 @@ class PlotArea(QWidget):
 
     def show_point_tooltip(self, key: str, x: float, y: float) -> None:
         """Show the (x, y) info tooltip at a point on a curve — same as a
-        click on the graph. Invoked from the Medidas Máx/Mín cells."""
+        click on the graph. Invoked from the Medidas cells and the cursor
+        readout panels."""
         if key in self._curves:
             self._show_tooltip(key, x, y)
+
+    def set_measure_region(self, a: float, b: float) -> None:
+        """Set the measures interval programmatically (from the A/B fields)
+        and recompute. setRegion doesn't emit sigRegionChangeFinished, so
+        the recompute signal is fired explicitly."""
+        self._measure_region.setRegion((a, b))
+        self._on_measure_region_finished()
 
     def _on_measure_region_finished(self) -> None:
         if not self._measure_region.isVisible():
             return
         lo, hi = self._measure_region.getRegion()
         self.measure_region_changed.emit(float(lo), float(hi))
+
+    def _on_measure_region_changing(self) -> None:
+        if not self._measure_region.isVisible():
+            return
+        lo, hi = self._measure_region.getRegion()
+        self.measure_region_changing.emit(float(lo), float(hi))
 
     def measures_rows(self, lo: float, hi: float,
                       ) -> list[tuple[str, str, str, dict | None]]:

@@ -708,6 +708,87 @@ def test_measures_maxmin_cell_interactions(win, app):
     app.processEvents()
 
 
+def test_measures_ab_fields_sync(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    win._open_measures()
+    m = win._measures
+    # dragging the region updates the A/B fields live (sigRegionChanged)
+    win._plot._measure_region.setRegion((0.2, 0.7))
+    app.processEvents()
+    assert abs(float(m._a_edit.text()) - 0.2) < 1e-6
+    assert abs(float(m._b_edit.text()) - 0.7) < 1e-6
+    # editing A/B moves the region and recomputes the table
+    m._a_edit.setText("0.3")
+    m._b_edit.setText("0.55")
+    m._commit_interval()
+    app.processEvents()
+    lo, hi = win._plot._measure_region.getRegion()
+    assert abs(lo - 0.3) < 1e-9 and abs(hi - 0.55) < 1e-9
+    assert not m._a_edit.styleSheet()  # no error highlight
+    # invalid A >= B is rejected: region unchanged, fields flagged
+    m._a_edit.setText("0.9")
+    m._b_edit.setText("0.4")
+    m._commit_interval()
+    app.processEvents()
+    lo2, hi2 = win._plot._measure_region.getRegion()
+    assert abs(lo2 - 0.3) < 1e-9 and abs(hi2 - 0.55) < 1e-9
+    assert "e74c3c" in m._a_edit.styleSheet()
+    # a focused field is not clobbered by live region sync
+    m._a_edit.setStyleSheet("")
+    m._a_edit.setText("typing")
+    m._a_edit.setFocus()
+    win._plot._measure_region.setRegion((0.1, 0.6))
+    app.processEvents()
+    assert m._a_edit.text() == "typing"      # skipped (has focus)
+    assert abs(float(m._b_edit.text()) - 0.6) < 1e-6  # B still synced
+    win._measures.close()
+    app.processEvents()
+
+
+def test_readout_point_click_shows_tooltip(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    # move the vertical cursor to a known X; readout lists (x, y)
+    win._plot._cursor.setValue(0.5)
+    win._plot._on_v_cursor_moved()
+    app.processEvents()
+    tree = win._v_readout._tree
+    row = next(tree.topLevelItem(i) for i in range(tree.topLevelItemCount())
+               if tree.topLevelItem(i).text(1) == "P1")
+    # clicking the value cell shows the graph tooltip at (0.5, 5)
+    win._v_readout._on_item_clicked(row, 2)
+    app.processEvents()
+    assert win._plot._click_label.isVisible()
+    assert win._plot._click_label.textItem.toPlainText() == "(0.5, 5)"
+    # (col-0 swatch -> color change is covered by the standalone test; not
+    # exercised here because it would open the modal color dialog)
+
+
+def test_readout_point_click_horizontal_children(app):
+    # standalone panel: horizontal cursor with multiple crossings -> each
+    # child value carries its own (x=value, y=coord) point
+    from plotxy_app.readout_panel import CursorReadout, _X_ROLE, _Y_ROLE
+    panel = CursorReadout("Cursor horizontal", "Y", "X")
+    panel.show()
+    app.processEvents()
+    panel.update_values(2.0, [("k1", "s", "#ff0000", [1.0, 3.0, 5.0])])
+    app.processEvents()
+    top = panel._tree.topLevelItem(0)
+    child = top.child(1)  # value 3.0
+    assert child.data(0, _X_ROLE) == 3.0   # x = value (horizontal cursor)
+    assert child.data(0, _Y_ROLE) == 2.0   # y = coord
+    captured = []
+    panel.point_clicked.connect(lambda k, x, y: captured.append((k, x, y)))
+    panel._on_item_clicked(child, 2)
+    assert captured == [("k1", 3.0, 2.0)]
+    panel.hide()
+
+
 def test_hcursor_matches_vcursor_color(win, app):
     win._apply_theme()
     assert win._plot._cursor.pen.color().name() == win._plot._hcursor.pen.color().name()

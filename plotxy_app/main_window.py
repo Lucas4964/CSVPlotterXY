@@ -145,6 +145,8 @@ class MainWindow(QMainWindow):
         self._plot.h_cursor_moved.connect(self._h_readout.update_values)
         self._v_readout.color_change_requested.connect(self._plot.prompt_color)
         self._h_readout.color_change_requested.connect(self._plot.prompt_color)
+        self._v_readout.point_clicked.connect(self._plot.show_point_tooltip)
+        self._h_readout.point_clicked.connect(self._plot.show_point_tooltip)
         self._cursor_menu.interpolation_changed.connect(
             self._plot.set_click_interpolation)
         self._cursor_menu.snap_changed.connect(self._plot.set_cursor_snap)
@@ -372,6 +374,9 @@ class MainWindow(QMainWindow):
                 self._on_measures_visibility)
             self._measures.point_activated.connect(self._plot.show_point_tooltip)
             self._measures.goto_x_requested.connect(self._on_measures_goto)
+            self._measures.interval_edited.connect(self._plot.set_measure_region)
+            self._plot.measure_region_changing.connect(
+                self._on_measure_region_changing)
         self._measures.show()
         self._measures.raise_()
         self._measures.activateWindow()
@@ -382,6 +387,11 @@ class MainWindow(QMainWindow):
     def _on_measures_goto(self, x: float) -> None:
         self._plot.set_cursor_x(x)
         self.statusBar().showMessage(f"Cursor em X = {x:.6g}", 4000)
+
+    def _on_measure_region_changing(self, lo: float, hi: float) -> None:
+        # live A/B field sync while the region is being dragged
+        if self._measures is not None and self._measures.isVisible():
+            self._measures.set_interval(lo, hi)
 
     def _update_measures(self, lo: float, hi: float) -> None:
         """Recompute the measures table only when the interval (or the
