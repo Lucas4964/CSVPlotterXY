@@ -6,7 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Qt, QUrl
 from PySide6.QtWidgets import QApplication
 
 from plotxy_app.main_window import MainWindow
@@ -1283,3 +1283,79 @@ def test_readout_width_hint_grows_splitter(win, app):
     win._on_readout_width_hint(start)
     app.processEvents()
     assert win._splitter.sizes()[2] >= grown - 5
+
+
+def test_export_image_png_svg_and_clipboard(app, tmp_path):
+    pa = _snap_plot(app)
+    png = tmp_path / "grafico.png"
+    pa.export_image(str(png))
+    assert png.exists() and png.stat().st_size > 0
+    svg = tmp_path / "grafico.svg"
+    pa.export_image(str(svg))
+    assert svg.exists() and "<svg" in svg.read_text(encoding="utf-8")
+    QApplication.clipboard().clear()
+    pa.copy_image()
+    assert not QApplication.clipboard().image().isNull()
+    pa.hide()
+
+
+def test_recent_files_tracking(win, app, csv_a, csv_b):
+    # hermetic: QSettings persists across runs, so start from a clean list
+    win._settings.setValue("recent_files", [])
+    win._add_recent_file(csv_a)
+    win._add_recent_file(csv_b)
+    recent = win._recent_files()
+    assert recent[0].endswith("b.csv")
+    assert recent[1].endswith("a.csv")
+    # re-adding moves the file back to the front, without duplicating
+    win._add_recent_file(csv_a)
+    recent = win._recent_files()
+    assert recent[0].endswith("a.csv")
+    assert len(recent) == 2
+    # menu population: entries named by basename, existing files enabled
+    win._populate_recent_menu()
+    actions = win._recent_menu.actions()
+    assert actions[0].text() == "a.csv" and actions[0].isEnabled()
+
+
+class _FakeDrop:
+    def __init__(self, paths):
+        self._urls = [QUrl.fromLocalFile(str(p)) for p in paths]
+        self.accepted = False
+
+    def mimeData(self):
+        return self
+
+    def urls(self):
+        return self._urls
+
+    def acceptProposedAction(self):
+        self.accepted = True
+
+
+def test_drag_drop_csv(win, app, tmp_path):
+    p = tmp_path / "dropped.csv"
+    p.write_text('"t","V"\n0,1\n1,2\n2,3\n')
+    before = len(win._project.files())
+    ev = _FakeDrop([p])
+    win.dragEnterEvent(ev)
+    assert ev.accepted
+    win.dropEvent(ev)
+    app.processEvents()
+    assert len(win._project.files()) == before + 1
+    # non-CSV is not accepted
+    ev2 = _FakeDrop([tmp_path / "nota.txt"])
+    win.dragEnterEvent(ev2)
+    assert not ev2.accepted
+
+
+def test_file_menu_actions(win):
+    # NOTE: never call QAction.menu() here — the PySide6 binding hands the
+    # menu's ownership to Python and the QMenu gets deleted with the
+    # temporary wrapper. Access the stored menu attributes instead.
+    assert any(a.text() == "&Arquivo" for a in win.menuBar().actions())
+    texts = [a.text() for a in win._file_menu.actions()]
+    assert any("Abrir CSV" in t for t in texts)
+    assert "Recentes" in texts
+    assert any("Exportar imagem" in t for t in texts)
+    assert any("Copiar imagem" in t for t in texts)

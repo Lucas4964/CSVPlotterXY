@@ -490,6 +490,37 @@ class PlotArea(QWidget):
             return None
         return float(np.nanmin(self._x)), float(np.nanmax(self._x))
 
+    # ------------------------------------------------------------- export
+
+    def export_image(self, path: str) -> None:
+        """Export the main plot (curves, axes, legend, cursors) to PNG or
+        SVG, chosen by the file extension. SVG renders the widget into a
+        QSvgGenerator — pyqtgraph's SVGExporter crashes post-processing
+        the arc paths of circle markers, and widget rendering is WYSIWYG."""
+        if path.lower().endswith(".svg"):
+            from PySide6.QtCore import QRect
+            from PySide6.QtGui import QPainter
+            from PySide6.QtSvg import QSvgGenerator
+            gen = QSvgGenerator()
+            gen.setFileName(path)
+            size = self._pw.size()
+            gen.setSize(size)
+            gen.setViewBox(QRect(0, 0, size.width(), size.height()))
+            gen.setTitle("CSVPlotterXY")
+            painter = QPainter(gen)
+            try:
+                self._pw.render(painter)
+            finally:
+                painter.end()
+        else:
+            from pyqtgraph.exporters import ImageExporter
+            ImageExporter(self._plot_item).export(path)
+
+    def copy_image(self) -> None:
+        """Copy the main plot to the clipboard as an image."""
+        from pyqtgraph.exporters import ImageExporter
+        ImageExporter(self._plot_item).export(copy=True)
+
     def focus_on_point(self, key: str, x: float, y: float) -> None:
         """Center the view on (x, y) with an automatic zoom that frames
         roughly ±40 original samples around the point ("Ir até o ponto"

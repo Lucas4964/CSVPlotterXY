@@ -35,6 +35,18 @@ class MainWindow(QMainWindow):
         self._project = Project()
         self._theme = THEMES.get(
             str(self._settings.value("theme", "dark")), THEMES["dark"])
+        self.setAcceptDrops(True)  # drop CSVs anywhere on the window
+
+        # --- menu bar (file-level actions live here, not on the toolbar).
+        # Keep Python references to the menus: letting the wrappers be
+        # garbage-collected deletes the underlying C++ QMenu (PySide6).
+        self._file_menu = self.menuBar().addMenu("&Arquivo")
+        self._file_menu.addAction("Abrir CSV…", self._open_file_dialog)
+        self._recent_menu = self._file_menu.addMenu("Recentes")
+        self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
+        self._file_menu.addSeparator()
+        self._file_menu.addAction("Exportar imagem…", self._export_image_dialog)
+        self._file_menu.addAction("Copiar imagem", self._copy_image)
 
         # --- toolbar
         toolbar = QToolBar()
@@ -174,6 +186,7 @@ class MainWindow(QMainWindow):
         first_file = not self._project.files()
         file_id = self._project.add_file(dataset)
         self._settings.setValue("last_dir", os.path.dirname(os.path.abspath(path)))
+        self._add_recent_file(path)
 
         if dataset.dropped_columns:
             shown = ", ".join(dataset.dropped_columns[:5])
@@ -232,6 +245,82 @@ class MainWindow(QMainWindow):
             "Arquivos CSV (*.csv);;Todos (*)")
         for path in paths:
             self.open_path(path)
+
+    # ------------------------------------------------------- recent files
+
+    def _recent_files(self) -> list[str]:
+        val = self._settings.value("recent_files", [])
+        if isinstance(val, str):   # QSettings collapses 1-item lists
+            val = [val]
+        return list(val or [])
+
+    def _add_recent_file(self, path: str) -> None:
+        path = os.path.abspath(path)
+        recent = [p for p in self._recent_files()
+                  if os.path.normcase(p) != os.path.normcase(path)]
+        recent.insert(0, path)
+        self._settings.setValue("recent_files", recent[:10])
+
+    def _populate_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        recent = self._recent_files()
+        if not recent:
+            action = self._recent_menu.addAction("(vazio)")
+            action.setEnabled(False)
+            return
+        for path in recent:
+            action = self._recent_menu.addAction(os.path.basename(path))
+            action.setToolTip(path)
+            action.setEnabled(os.path.exists(path))
+            action.triggered.connect(
+                lambda checked=False, p=path: self.open_path(p))
+
+    # --------------------------------------------------------- drag & drop
+
+    def dragEnterEvent(self, event) -> None:
+        if any(u.isLocalFile() and u.toLocalFile().lower().endswith(".csv")
+               for u in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                path = url.toLocalFile()
+                if path.lower().endswith(".csv"):
+                    self.open_path(path)
+        event.acceptProposedAction()
+
+    # ------------------------------------------------------- image export
+
+    def _export_image_dialog(self) -> None:
+        if not self._plot._curves:
+            QMessageBox.information(self, "Exportar imagem",
+                                    "Plote pelo menos uma série primeiro.")
+            return
+        last_dir = str(self._settings.value("last_dir", ""))
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Exportar imagem", os.path.join(last_dir, "grafico.png"),
+            "Imagem PNG (*.png);;Imagem SVG (*.svg)")
+        if not path:
+            return
+        if not path.lower().endswith((".png", ".svg")):
+            path += ".svg" if "SVG" in selected else ".png"
+        try:
+            self._plot.export_image(path)
+        except Exception as e:  # exporter errors (permissions, disk…)
+            QMessageBox.critical(self, "Exportar imagem",
+                                 f"Falha ao exportar: {e}")
+            return
+        self.statusBar().showMessage(f"Imagem exportada: {path}", 5000)
+
+    def _copy_image(self) -> None:
+        if not self._plot._curves:
+            QMessageBox.information(self, "Copiar imagem",
+                                    "Plote pelo menos uma série primeiro.")
+            return
+        self._plot.copy_image()
+        self.statusBar().showMessage(
+            "Imagem copiada para a área de transferência", 4000)
 
     def _on_selection_changed(self, x_ref, y_refs: list) -> None:
         # keep the project's X axis current so D() snapshots the right axis
