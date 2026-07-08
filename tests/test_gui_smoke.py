@@ -1177,3 +1177,109 @@ def test_bring_cursor_y_syncs_cursor_menu(win, app):
     # restore default
     win._cursor_menu._h_check.setChecked(False)
     app.processEvents()
+
+
+def _snap_plot(app):
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.show()
+    app.processEvents()
+    x = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    y = np.array([0.0, 10.0, 20.0, 30.0, 40.0])
+    pa.set_series("k", "x", x, [("s", "s", y)])
+    pa.set_cursor_visible("h", True)
+    app.processEvents()
+    return pa
+
+
+def test_snap_is_synchronous(app):
+    # the anti-flicker guarantee: with snapping on, the line value is
+    # already at the nearest sample when setValue returns — BEFORE any
+    # event-loop tick, so the raw drag position is never painted
+    pa = _snap_plot(app)
+    pa.set_cursor_snap(True)
+    pa._cursor.setValue(1.4)
+    assert abs(pa._cursor.value() - 1.0) < 1e-9   # no processEvents!
+    pa._cursor.setValue(1.6)
+    assert abs(pa._cursor.value() - 2.0) < 1e-9
+    pa._hcursor.setValue(22.0)
+    assert abs(pa._hcursor.value() - 20.0) < 1e-9
+    # snap off: raw positions kept, still synchronous behavior
+    pa.set_cursor_snap(False)
+    pa._cursor.setValue(1.4)
+    assert abs(pa._cursor.value() - 1.4) < 1e-9
+    pa.hide()
+
+
+def test_marker_click_shows_tooltip(app):
+    pa = _snap_plot(app)
+    pa.set_cursor_x(2.0)
+    app.processEvents()
+    pts = pa._markers.points()
+    assert len(pts) == 1
+    assert pts[0].data() == "s"   # spot carries the series key
+    pa._on_marker_clicked(pa._markers, [pts[0]])
+    assert pa._click_label.isVisible()
+    assert pa._click_label.textItem.toPlainText() == "(2, 20)"
+    pa.hide()
+
+
+def test_h_marker_click_shows_tooltip(app):
+    pa = _snap_plot(app)
+    pa.set_cursor_y(20.0)
+    app.processEvents()
+    pts = pa._h_markers.points()
+    assert len(pts) == 1
+    pa._on_marker_clicked(pa._h_markers, [pts[0]])
+    assert pa._click_label.isVisible()
+    assert pa._click_label.textItem.toPlainText() == "(2, 20)"
+    pa.hide()
+
+
+def test_focus_on_point_neighborhood(app):
+    from plotxy_app.plot_area import PlotArea
+    pa = PlotArea()
+    pa.resize(900, 600)
+    pa.show()
+    app.processEvents()
+    x = np.linspace(0.0, 100.0, 1001)     # spacing 0.1
+    y = x * 2.0
+    pa.set_series("k", "x", x, [("s", "s", y)])
+    app.processEvents()
+    pa.focus_on_point("s", 50.0, 100.0)
+    x0, x1, y0, y1 = pa.view_ranges()
+    assert abs((x0 + x1) / 2 - 50.0) < 1e-6          # centered on the point
+    assert abs((x1 - x0) - 8.0) < 0.01               # ±40 samples * 0.1
+    assert y0 <= 92.0 and y1 >= 108.0                # local Y window + point
+    # unknown key: no crash, no view change
+    before = pa.view_ranges()
+    pa.focus_on_point("nope", 10.0, 10.0)
+    assert pa.view_ranges() == before
+    pa.hide()
+
+
+def test_goto_point_via_readout_signal(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    key = next(iter(win._plot._curves))
+    win._v_readout.goto_point.emit(key, 0.5, 5.0)
+    app.processEvents()
+    x0, x1, _, _ = win._plot.view_ranges()
+    assert abs((x0 + x1) / 2 - 0.5) < 1e-6
+
+
+def test_readout_width_hint_grows_splitter(win, app):
+    sizes = win._splitter.sizes()
+    assert len(sizes) == 3
+    start = sizes[2]
+    # a larger hint grows the readout pane (within the 40% cap)
+    win._on_readout_width_hint(start + 120)
+    app.processEvents()
+    grown = win._splitter.sizes()[2]
+    assert grown >= start + 100
+    # a smaller hint never shrinks it back
+    win._on_readout_width_hint(start)
+    app.processEvents()
+    assert win._splitter.sizes()[2] >= grown - 5

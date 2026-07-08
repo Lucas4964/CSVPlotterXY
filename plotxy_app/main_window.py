@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(2, 0)
         splitter.setSizes([280, 760, 230])
         splitter.setCollapsible(1, False)
+        self._splitter = splitter  # for the readouts' auto-width requests
         self.setCentralWidget(splitter)
 
         # axis-scale controls live in a dropdown popup (opened from toolbar)
@@ -147,6 +148,10 @@ class MainWindow(QMainWindow):
         self._h_readout.color_change_requested.connect(self._plot.prompt_color)
         self._v_readout.point_clicked.connect(self._plot.show_point_tooltip)
         self._h_readout.point_clicked.connect(self._plot.show_point_tooltip)
+        self._v_readout.goto_point.connect(self._on_goto_point)
+        self._h_readout.goto_point.connect(self._on_goto_point)
+        self._v_readout.width_hint_changed.connect(self._on_readout_width_hint)
+        self._h_readout.width_hint_changed.connect(self._on_readout_width_hint)
         self._cursor_menu.interpolation_changed.connect(
             self._plot.set_click_interpolation)
         self._cursor_menu.snap_changed.connect(self._plot.set_cursor_snap)
@@ -388,6 +393,25 @@ class MainWindow(QMainWindow):
     def _on_measures_goto(self, x: float) -> None:
         self._plot.set_cursor_x(x)
         self.statusBar().showMessage(f"Cursor em X = {x:.6g}", 4000)
+
+    def _on_goto_point(self, key: str, x: float, y: float) -> None:
+        self._plot.focus_on_point(key, x, y)
+        self.statusBar().showMessage(
+            f"Vista centralizada em ({x:.6g}, {y:.6g})", 4000)
+
+    def _on_readout_width_hint(self, hint: int) -> None:
+        """Grow (never shrink) the readout pane so its content fits without
+        a horizontal scrollbar. Capped at 40% of the window, keeping at
+        least 300 px for the plot."""
+        sizes = self._splitter.sizes()
+        if len(sizes) != 3 or hint <= sizes[2]:
+            return
+        total = sum(sizes)
+        new_width = min(hint, int(total * 0.4))
+        delta = new_width - sizes[2]
+        if delta <= 0 or sizes[1] - delta < 300:
+            return
+        self._splitter.setSizes([sizes[0], sizes[1] - delta, new_width])
 
     def _on_measure_region_changing(self, lo: float, hi: float) -> None:
         # live A/B field sync while the region is being dragged

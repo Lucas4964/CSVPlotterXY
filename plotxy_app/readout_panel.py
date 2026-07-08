@@ -64,6 +64,8 @@ class CursorReadout(QWidget):
 
     color_change_requested = Signal(str)
     point_clicked = Signal(str, float, float)  # (key, x, y) of a value cell
+    goto_point = Signal(str, float, float)     # context menu "Ir até o ponto"
+    width_hint_changed = Signal(int)           # px needed to show all columns
 
     def __init__(self, title: str, coord_symbol: str, value_symbol: str,
                  parent: QWidget | None = None):
@@ -135,6 +137,21 @@ class CursorReadout(QWidget):
                     top.addChild(more)
             self._tree.addTopLevelItem(top)
             top.setExpanded(True)
+        self._emit_width_hint()
+
+    def _emit_width_hint(self) -> None:
+        """Announce the width needed to show every column without a
+        horizontal scrollbar, so the main window can widen the panel."""
+        tree = self._tree
+        header = tree.header()
+        w1 = max(tree.sizeHintForColumn(1), header.sectionSizeHint(1))
+        w2 = max(tree.sizeHintForColumn(2), header.sectionSizeHint(2))
+        needed = (_SWATCH_COLUMN_WIDTH + w1 + w2 + 2 * tree.frameWidth()
+                  + tree.verticalScrollBar().sizeHint().width())
+        margins = self.layout().contentsMargins()
+        needed += margins.left() + margins.right() + 8
+        if needed > self.width():
+            self.width_hint_changed.emit(needed)
 
     def _tag_point(self, item: QTreeWidgetItem, key: str,
                    coord: float, value: float) -> None:
@@ -182,6 +199,12 @@ class CursorReadout(QWidget):
             value = item.text(2)
             menu.addAction("Copiar valor").triggered.connect(
                 lambda: self._copy(value))
+            x = item.data(0, _X_ROLE)
+            y = item.data(0, _Y_ROLE)
+            if x is not None and y is not None:
+                key = item.data(0, _KEY_ROLE)
+                menu.addAction("Ir até o ponto").triggered.connect(
+                    lambda: self.goto_point.emit(key, x, y))
         else:
             return
         menu.exec(self._tree.viewport().mapToGlobal(pos))

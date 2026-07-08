@@ -165,24 +165,24 @@ class PlotArea(QWidget):
 
         self._cursor = pg.InfiniteLine(angle=90, movable=True)
         self._cursor.setZValue(90)
-        self._cursor.sigPositionChanged.connect(
-            lambda: self._vcursor_timer.start())
+        self._cursor.sigPositionChanged.connect(self._on_v_cursor_pos_changed)
         self._pw.addItem(self._cursor)
         self._cursor.hide()
 
         self._markers = pg.ScatterPlotItem(size=9, pxMode=True)
         self._markers.setZValue(100)
+        self._markers.sigClicked.connect(self._on_marker_clicked)
         self._pw.addItem(self._markers)
 
         self._hcursor = pg.InfiniteLine(angle=0, movable=True)
         self._hcursor.setZValue(90)
-        self._hcursor.sigPositionChanged.connect(
-            lambda: self._hcursor_timer.start())
+        self._hcursor.sigPositionChanged.connect(self._on_h_cursor_pos_changed)
         self._pw.addItem(self._hcursor)
         self._hcursor.hide()
 
         self._h_markers = pg.ScatterPlotItem(size=9, pxMode=True)
         self._h_markers.setZValue(100)
+        self._h_markers.sigClicked.connect(self._on_marker_clicked)
         self._pw.addItem(self._h_markers)
 
         # click tooltip (Desmos-style): single point, dismissable
@@ -489,6 +489,45 @@ class PlotArea(QWidget):
         if self._x is None or len(self._x) == 0:
             return None
         return float(np.nanmin(self._x)), float(np.nanmax(self._x))
+
+    def focus_on_point(self, key: str, x: float, y: float) -> None:
+        """Center the view on (x, y) with an automatic zoom that frames
+        roughly ±40 original samples around the point ("Ir até o ponto"
+        from the readout panels). Y is fitted to the series' local values,
+        always including the point itself."""
+        if self._x is None or key not in self._ys:
+            return
+        n = len(self._x)
+        half = None
+        i0 = i1 = None
+        if self._x_kind != _NON_MONOTONIC and self._x_sorted is not None:
+            i = int(np.searchsorted(self._x_sorted, x))
+            i0 = max(0, i - 40)
+            i1 = min(n - 1, i + 40)
+            span = float(self._x_sorted[i1] - self._x_sorted[i0])
+            if span > 0 and np.isfinite(span):
+                half = span / 2
+        if half is None:
+            rng = self.x_range()
+            data_span = (rng[1] - rng[0]) if rng else 0.0
+            half = data_span * 0.025 if data_span > 0 else 0.5
+        xlo, xhi = x - half, x + half
+
+        # local Y window of the target series (nan-aware), point included
+        ys = self._ys[key]
+        if i0 is not None and self._x_kind == _DECREASING:
+            j0, j1 = n - 1 - i1, n - 1 - i0   # sorted view is reversed
+        else:
+            j0, j1 = i0, i1
+        ylo = yhi = y
+        if j0 is not None:
+            seg = ys[j0:j1 + 1]
+            with np.errstate(invalid="ignore"):
+                if np.any(np.isfinite(seg)):
+                    ylo = min(ylo, float(np.nanmin(seg)))
+                    yhi = max(yhi, float(np.nanmax(seg)))
+        pad = (yhi - ylo) * 0.2 or 1.0
+        self.set_manual_ranges(xlo, xhi, ylo - pad, yhi + pad)
 
     def set_cursor_x(self, value: float) -> None:
         self._cursor.setValue(value)
@@ -900,13 +939,25 @@ class PlotArea(QWidget):
         self._on_v_cursor_moved()
         self._on_h_cursor_moved()
 
-    def _spot(self, x: float, y: float, color: str) -> dict:
+    def _spot(self, x: float, y: float, color: str, key: str = "") -> dict:
         return {
             "pos": (x, y),
+            "data": key,   # series key, so clicking the spot can identify it
             "brush": pg.mkBrush(color),
             "pen": pg.mkPen("#ffffff" if self._theme and self._theme.name == "dark"
                             else "#000000", width=1),
         }
+
+    def _on_marker_clicked(self, _item, points, _ev=None) -> None:
+        """Left click on an intersection marker: same tooltip as clicking
+        the curve at that exact point."""
+        if not len(points):
+            return
+        pt = points[0]
+        key = pt.data()
+        if key:
+            self.show_point_tooltip(key, float(pt.pos().x()),
+                                    float(pt.pos().y()))
 
     def set_cursor_snap(self, enabled: bool) -> None:
         """When enabled, both cursors move only onto original sample
@@ -967,6 +1018,21 @@ class PlotArea(QWidget):
             line.blockSignals(False)
         return snapped
 
+    def _on_v_cursor_pos_changed(self) -> None:
+        """Runs synchronously on every cursor move. Snapping must happen
+        here — before the line is ever painted at the raw drag position —
+        or the cursor visibly flickers between the mouse position and the
+        snapped sample. The (heavier) readout recomputation stays coalesced
+        in the 0 ms timer."""
+        if self._snap_to_samples:
+            self._maybe_snap(self._cursor, self._x)
+        self._vcursor_timer.start()
+
+    def _on_h_cursor_pos_changed(self) -> None:
+        if self._snap_to_samples:
+            self._maybe_snap(self._hcursor, None)
+        self._hcursor_timer.start()
+
     def _on_v_cursor_moved(self) -> None:
         if self._x is None or not self._curves or not self._v_enabled:
             self._markers.setData([])
@@ -983,7 +1049,7 @@ class PlotArea(QWidget):
                 vals = [y] if np.isfinite(y) else []
                 rows.append((key, self._labels[key], color, vals))
                 if vals:
-                    spots.append(self._spot(cx, y, color))
+                    spots.append(self._spot(cx, y, color, key))
         else:
             # general case: every real crossing of x == cx
             for key in self._curves:
@@ -991,7 +1057,7 @@ class PlotArea(QWidget):
                 vals = [float(v) for v in
                         polyline_crossings(self._x, self._ys[key], cx)]
                 rows.append((key, self._labels[key], color, vals))
-                spots.extend(self._spot(cx, v, color) for v in vals)
+                spots.extend(self._spot(cx, v, color, key) for v in vals)
         self._markers.setData(spots)
         self.v_cursor_moved.emit(cx, rows)
 
@@ -1007,7 +1073,7 @@ class PlotArea(QWidget):
             vals = [float(v) for v in
                     polyline_crossings(self._ys[key], self._x, cy)]
             rows.append((key, self._labels[key], color, vals))
-            spots.extend(self._spot(v, cy, color) for v in vals)
+            spots.extend(self._spot(v, cy, color, key) for v in vals)
         self._h_markers.setData(spots)
         self.h_cursor_moved.emit(cy, rows)
 
