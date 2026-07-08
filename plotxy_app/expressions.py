@@ -23,12 +23,18 @@ class ExpressionError(Exception):
 FUNCTIONS: dict[str, Callable] = {
     "abs": np.abs,
     "sqrt": np.sqrt,
-    # futuras: "sin": np.sin, "cos": np.cos, "log": np.log, ...
+    "sin": np.sin,
+    "cos": np.cos,
+    "tan": np.tan,
+    "exp": np.exp,
+    "log": np.log,
+    "log10": np.log10,
 }
 
 # X-aware functions handled specially by the evaluator (not pointwise).
 # D(series) = derivative of the series with respect to the X axis.
-_X_FUNCS = {"D"}
+# I(series) = cumulative integral (trapezoid) with respect to the X axis.
+_X_FUNCS = {"D", "I"}
 
 
 def _known_functions() -> str:
@@ -121,13 +127,18 @@ def _eval_node(node: ast.AST, series: dict[str, np.ndarray],
     if isinstance(node, ast.UnaryOp):
         return _UNARYOPS[type(node.op)](_eval_node(node.operand, series, x))
     if isinstance(node, ast.Call):
-        if node.func.id == "D":
+        if node.func.id in _X_FUNCS:
+            fname = node.func.id
             if x is None:
-                raise ExpressionError("D() requer um eixo X selecionado.")
+                raise ExpressionError(f"{fname}() requer um eixo X selecionado.")
             if len(x) < 2:
-                raise ExpressionError("Série curta demais para D().")
+                raise ExpressionError(f"Série curta demais para {fname}().")
             y = np.asarray(_eval_node(node.args[0], series, x), dtype=np.float64)
-            return np.gradient(y, x)
+            if fname == "D":
+                return np.gradient(y, x)
+            # I(): cumulative trapezoid, same length as y, starting at 0
+            seg = np.diff(x) * (y[:-1] + y[1:]) / 2.0
+            return np.concatenate(([0.0], np.cumsum(seg)))
         args = [_eval_node(a, series, x) for a in node.args]
         return FUNCTIONS[node.func.id](*args)
     if isinstance(node, ast.Name):
