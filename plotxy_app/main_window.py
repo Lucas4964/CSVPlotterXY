@@ -24,6 +24,7 @@ from .readout_panel import CursorReadout
 from .series_dialog import SeriesDialog
 from .series_panel import PanelGroup, PanelSeries, SeriesPanel
 from .session import SessionError, load_session, save_session
+from .spectrum import SpectrumWindow, compute_spectrum
 from .themes import THEMES, apply_app_theme
 
 
@@ -90,6 +91,10 @@ class MainWindow(QMainWindow):
         measures_btn.clicked.connect(self._open_measures)
         toolbar.addWidget(measures_btn)
 
+        spectrum_btn = QPushButton("Espectro")
+        spectrum_btn.clicked.connect(self._open_spectrum)
+        toolbar.addWidget(spectrum_btn)
+
         self._theme_btn = QPushButton()
         self._theme_btn.clicked.connect(self._toggle_theme)
         toolbar.addWidget(self._theme_btn)
@@ -139,6 +144,8 @@ class MainWindow(QMainWindow):
         # Medidas window (lazy) + measures cache
         self._measures: MeasuresWindow | None = None
         self._measures_cache_key = None
+        # Espectro window (lazy)
+        self._spectrum: SpectrumWindow | None = None
 
         # toolbar dropdowns work as toggles: a Qt.Popup closes on the
         # press that lands on its own button, so an event filter records
@@ -172,6 +179,7 @@ class MainWindow(QMainWindow):
             self._plot.set_click_interpolation)
         self._cursor_menu.snap_changed.connect(self._plot.set_cursor_snap)
         self._plot.cursors_enabled_changed.connect(self._cursor_menu.set_states)
+        self._plot.visible_set_changed.connect(self._update_spectrum)
         self._plot.measure_region_changed.connect(self._update_measures)
         self._axis.range_changed.connect(self._on_axis_range_changed)
         self._axis.auto_requested.connect(lambda: self._plot.autorange())
@@ -398,9 +406,11 @@ class MainWindow(QMainWindow):
         self._project.set_x_axis(x_ref)
         if x_ref is None or not self._project.files():
             self._plot.clear()
+            self._update_spectrum()
             return
         rp = self._project.resolve_plot(x_ref, list(y_refs))
         self._plot.set_series(rp.x_key, rp.x_label, rp.x, rp.series)
+        self._update_spectrum()
         if rp.truncated:
             self.statusBar().showMessage(
                 f"Séries com tamanhos diferentes — usando os primeiros "
@@ -590,6 +600,30 @@ class MainWindow(QMainWindow):
         self._measures_cache_key = key
         self._measures.set_rows(lo, hi, self._plot.measures_rows(lo, hi))
 
+    # ------------------------------------------------------------ spectrum
+
+    def _open_spectrum(self) -> None:
+        if not self._plot._curves:
+            QMessageBox.information(
+                self, "Espectro", "Plote pelo menos uma série primeiro.")
+            return
+        if self._spectrum is None:
+            self._spectrum = SpectrumWindow(self)
+            self._spectrum.apply_theme(self._theme)
+        self._spectrum.show()
+        self._spectrum.raise_()
+        self._spectrum.activateWindow()
+        self._update_spectrum()
+
+    def _update_spectrum(self) -> None:
+        """Recompute the spectrum of the visible series — only while the
+        window is open (selection and legend toggles call this)."""
+        if self._spectrum is None or not self._spectrum.isVisible():
+            return
+        rows = [(key, label, color, compute_spectrum(x, y))
+                for key, label, color, x, y in self._plot.spectrum_rows()]
+        self._spectrum.set_rows(rows)
+
     def _open_goto_popup(self) -> None:
         def prepare():
             if self._plot.x_range() is None:
@@ -644,5 +678,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         apply_app_theme(app, self._theme)
         self._plot.apply_theme(self._theme)
+        if self._spectrum is not None:
+            self._spectrum.apply_theme(self._theme)
         self._theme_btn.setText(
             "☀ Tema claro" if self._theme.name == "dark" else "🌙 Tema escuro")

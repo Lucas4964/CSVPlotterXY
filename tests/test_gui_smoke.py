@@ -1349,6 +1349,30 @@ def test_drag_drop_csv(win, app, tmp_path):
     assert not ev2.accepted
 
 
+def test_spectrum_window_follows_selection_and_legend(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    win._open_spectrum()
+    app.processEvents()
+    assert win._spectrum is not None and win._spectrum.isVisible()
+    assert len(win._spectrum._curves) == 1
+    # legend toggle hides the series -> spectrum follows
+    key = next(iter(win._plot._curves))
+    curve = win._plot._curves[key]
+    curve.setVisible(False)
+    win._plot._legend.sigSampleClicked.emit(curve)
+    app.processEvents()
+    assert len(win._spectrum._curves) == 0
+    curve.setVisible(True)
+    win._plot._legend.sigSampleClicked.emit(curve)
+    app.processEvents()
+    assert len(win._spectrum._curves) == 1
+    win._spectrum.close()
+    app.processEvents()
+
+
 def test_project_save_load_roundtrip(win, app, tmp_path):
     from plotxy_app.session import load_session, save_session
     f1 = file_ids(win)[0]

@@ -98,6 +98,8 @@ class PlotArea(QWidget):
     # emitted when a right-click "Trazer cursor" turns on a hidden cursor, so
     # the toolbar's Cursores menu / readout panels can sync their state
     cursors_enabled_changed = Signal(bool, bool)
+    # emitted when a legend click hides/shows a curve (spectrum follows it)
+    visible_set_changed = Signal()
     view_range_changed = Signal(float, float, float, float)
     measure_region_changed = Signal(float, float)   # on release (recompute)
     measure_region_changing = Signal(float, float)   # live during drag
@@ -714,6 +716,16 @@ class PlotArea(QWidget):
         self._on_h_cursor_moved()
         if self._measure_region.isVisible():
             self._on_measure_region_finished()
+        self.visible_set_changed.emit()
+
+    def spectrum_rows(self) -> list[tuple[str, str, str,
+                                          np.ndarray, np.ndarray]]:
+        """(key, label, color, x, y) of every visible curve — full
+        arrays, for the spectrum window."""
+        if self._x is None:
+            return []
+        return [(key, self._labels[key], self._color_of[key],
+                 self._x, self._ys[key]) for key in self.visible_keys()]
 
     def measures_rows(self, lo: float, hi: float,
                       ) -> list[tuple[str, str, str, dict | None]]:
