@@ -8,13 +8,25 @@ e fluido, com navegação estilo Desmos.
 
 ## Recursos
 
-- **Projeto multi-arquivo**: carregue vários CSVs; plote séries de arquivos
-  diferentes no mesmo gráfico. Cada coluna vira uma série; cada arquivo expõe
-  também a série `index` (número da linha).
-- **Seleção de eixos**: qualquer série como X, quaisquer séries como Y.
-- **Séries personalizadas por expressão**: crie séries com `+ - * / **`,
-  `abs()`, `sqrt()`, parênteses e o operador **`D()`** (derivada em relação ao
-  eixo X). Avaliador seguro por AST (sem `eval`).
+- **Projeto multi-arquivo**: carregue vários CSVs (diálogo, arrastar e soltar
+  ou menu Recentes); plote séries de arquivos diferentes no mesmo gráfico.
+  Cada coluna vira uma série; cada arquivo expõe também a série `index`
+  (número da linha).
+- **CSV brasileiro/europeu**: detecção automática de separador (`,` `;` ou
+  tab) e de vírgula decimal — arquivos exportados de Excel/equipamentos no
+  padrão BR abrem sem conversão.
+- **Projeto salvo (`.plotxy`)**: salve e reabra a sessão inteira — arquivos,
+  seleção X/Y, expressões, cores, vista e tema (menu Arquivo).
+- **Seleção de eixos**: qualquer série como X, quaisquer séries como Y;
+  clique na legenda oculta/exibe a série em toda a interface.
+- **Séries personalizadas por expressão**: `+ - * / **`, parênteses,
+  `abs()`, `sqrt()`, `sin()`, `cos()`, `tan()`, `exp()`, `log()`, `log10()`
+  e os operadores **`D()`** (derivada) e **`I()`** (integral acumulada) em
+  relação ao eixo X. Avaliador seguro por AST (sem `eval`).
+- **Espectro (FFT)**: janela com o espectro de amplitude unilateral das
+  séries visíveis (aviso quando a amostragem não é uniforme).
+- **Exportar imagem**: PNG/SVG ou cópia direta para a área de transferência
+  (menu Arquivo).
 - **Cursores**: vertical e horizontal, arrastáveis, exibindo **todas** as
   interseções com cada série; painel lateral por cursor; opção de restringir o
   movimento aos pontos originais.
