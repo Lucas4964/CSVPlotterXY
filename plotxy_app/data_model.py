@@ -57,39 +57,67 @@ def _is_float(token: str) -> bool:
         return False
 
 
+def _detect_delimiter(line: str) -> str:
+    """Sniff the field delimiter from the first line. Semicolon or tab
+    present means a European/Brazilian export (where the comma is the
+    decimal separator); otherwise the classic comma CSV."""
+    if ";" in line:
+        return ";"
+    if "\t" in line:
+        return "\t"
+    return ","
+
+
 def load_csv(path: str) -> DataSet:
     """Load a CSV file where each column is an independent data series.
 
-    Header row is auto-detected: if any token on the first line is not
-    parseable as a float, it is treated as a header; otherwise names
-    col_1..col_N are synthesized. Non-numeric cells become NaN; columns
-    that are entirely NaN are dropped and reported in dropped_columns.
+    The delimiter is auto-detected (`,`, `;` or tab). With `;`/tab files
+    the decimal comma is converted to a point (Brazilian/European Excel
+    and instrument exports). Header row is auto-detected: if any token on
+    the first line is not parseable as a float, it is treated as a
+    header; otherwise names col_1..col_N are synthesized. Non-numeric
+    cells become NaN; columns that are entirely NaN are dropped and
+    reported in dropped_columns.
 
     Loading is synchronous; if very large files ever become a use case,
     this is the call to move onto a QThread.
     """
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            first_line = f.readline()
-            if not first_line.strip():
-                raise DataLoadError("O arquivo está vazio.")
-            tokens = next(csv.reader(io.StringIO(first_line)))
-            has_header = not all(_is_float(t) for t in tokens if t.strip())
-            if has_header:
-                names = _dedup_names([t.strip() or f"col_{i + 1}"
-                                      for i, t in enumerate(tokens)])
-            else:
-                names = [f"col_{i + 1}" for i in range(len(tokens))]
-                f.seek(0)
-            try:
-                data = np.loadtxt(f, delimiter=",", ndmin=2)
-            except ValueError:
-                f.seek(0)
-                data = np.genfromtxt(f, delimiter=",",
-                                     skip_header=1 if has_header else 0,
-                                     filling_values=np.nan, ndmin=2)
+            text = f.read()
     except OSError as e:
         raise DataLoadError(f"Não foi possível ler o arquivo:\n{e}") from e
+
+    first_line, _, rest = text.partition("\n")
+    if not first_line.strip():
+        raise DataLoadError("O arquivo está vazio.")
+    delim = _detect_delimiter(first_line)
+    tokens = next(csv.reader(io.StringIO(first_line), delimiter=delim))
+    # with ; or tab, "0,5" is a decimal-comma number, not a header token
+    check = ([t.replace(",", ".") for t in tokens] if delim != ","
+             else tokens)
+    has_header = not all(_is_float(t) for t in check if t.strip())
+    if has_header:
+        names = _dedup_names([t.strip() or f"col_{i + 1}"
+                              for i, t in enumerate(tokens)])
+        body = rest
+    else:
+        names = [f"col_{i + 1}" for i in range(len(tokens))]
+        body = text
+    if delim != ",":
+        body = body.replace(",", ".")  # decimal comma -> point (data only)
+    if not body.strip():
+        raise DataLoadError("O arquivo não contém linhas de dados numéricos.")
+
+    try:
+        data = np.loadtxt(io.StringIO(body), delimiter=delim, ndmin=2)
+    except ValueError:
+        try:
+            data = np.genfromtxt(io.StringIO(body), delimiter=delim,
+                                 filling_values=np.nan, ndmin=2)
+        except ValueError:
+            raise DataLoadError(
+                "O arquivo não contém linhas de dados numéricos.") from None
 
     if data.size == 0 or data.shape[0] == 0:
         raise DataLoadError("O arquivo não contém linhas de dados numéricos.")
