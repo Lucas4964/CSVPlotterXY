@@ -154,6 +154,9 @@ class PlotArea(QWidget):
         self._plot_item = self._pw.getPlotItem()
         self._plot_item.showGrid(x=True, y=True, alpha=0.15)
         self._legend = self._plot_item.addLegend(offset=(10, 10))
+        # clicking a legend swatch toggles the curve (pyqtgraph built-in);
+        # this keeps cursors/measures/zoom-twin consistent with it
+        self._legend.sigSampleClicked.connect(self._on_legend_sample_clicked)
 
         # origin reference lines (x=0, y=0), Desmos-style: subtly bolder
         # than the grid, always behind the data curves
@@ -687,14 +690,34 @@ class PlotArea(QWidget):
         lo, hi = self._measure_region.getRegion()
         self.measure_region_changing.emit(float(lo), float(hi))
 
+    def visible_keys(self) -> tuple[str, ...]:
+        """Keys of the curves currently shown (legend can hide curves)."""
+        return tuple(k for k, c in self._curves.items() if c.isVisible())
+
+    def _on_legend_sample_clicked(self, item) -> None:
+        """pyqtgraph's ItemSample already toggled the curve's visibility;
+        mirror it on the zoom twin and recompute everything that lists
+        per-series values (readouts, markers, measures, h-snap)."""
+        for key, curve in self._curves.items():
+            if curve is item:
+                zcurve = self._zoom_curves.get(key)
+                if zcurve is not None:
+                    zcurve.setVisible(curve.isVisible())
+                break
+        self._y_union_sorted = None  # h-cursor snap follows visibility
+        self._on_v_cursor_moved()
+        self._on_h_cursor_moved()
+        if self._measure_region.isVisible():
+            self._on_measure_region_finished()
+
     def measures_rows(self, lo: float, hi: float,
                       ) -> list[tuple[str, str, str, dict | None]]:
-        """Interval statistics for every active curve (see measures.py)."""
+        """Interval statistics for every visible curve (see measures.py)."""
         if self._x is None:
             return []
         return [(key, self._labels[key], self._color_of[key],
                  compute_measures(self._x, self._ys[key], lo, hi, self._x_kind))
-                for key in self._curves]
+                for key in self.visible_keys()]
 
     def apply_theme(self, theme: Theme) -> None:
         self._theme = theme
@@ -998,11 +1021,13 @@ class PlotArea(QWidget):
         self._on_h_cursor_moved()
 
     def _y_samples(self) -> np.ndarray | None:
-        """Sorted union of all plotted finite Y samples, built lazily and
-        cached until the selection changes (used only by h-cursor snap)."""
+        """Sorted union of the visible curves' finite Y samples, built
+        lazily and cached until the selection or a legend toggle changes
+        it (used only by h-cursor snap)."""
         if self._y_union_sorted is None:
-            finite = [y[np.isfinite(y)] for y in self._ys.values()
-                      if np.any(np.isfinite(y))]
+            finite = [self._ys[k][np.isfinite(self._ys[k])]
+                      for k in self.visible_keys()
+                      if np.any(np.isfinite(self._ys[k]))]
             if not finite:
                 return None
             self._y_union_sorted = np.sort(np.concatenate(finite))
@@ -1073,7 +1098,7 @@ class PlotArea(QWidget):
         spots, rows = [], []
         if self._x_kind != _NON_MONOTONIC:
             # fast path: single interpolated value per series
-            keys = list(self._curves)
+            keys = list(self.visible_keys())
             ys = self._values_at(cx, keys)
             for key, y in zip(keys, ys):
                 color = self._color_of[key]
@@ -1083,7 +1108,7 @@ class PlotArea(QWidget):
                     spots.append(self._spot(cx, y, color, key))
         else:
             # general case: every real crossing of x == cx
-            for key in self._curves:
+            for key in self.visible_keys():
                 color = self._color_of[key]
                 vals = [float(v) for v in
                         polyline_crossings(self._x, self._ys[key], cx)]
@@ -1099,7 +1124,7 @@ class PlotArea(QWidget):
             return
         cy = self._maybe_snap(self._hcursor, None)
         spots, rows = [], []
-        for key in self._curves:
+        for key in self.visible_keys():
             color = self._color_of[key]
             vals = [float(v) for v in
                     polyline_crossings(self._ys[key], self._x, cy)]

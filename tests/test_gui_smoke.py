@@ -1349,6 +1349,39 @@ def test_drag_drop_csv(win, app, tmp_path):
     assert not ev2.accepted
 
 
+def test_legend_toggle_hides_series_everywhere(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    win._panel.check_ref(SeriesRef("column", f1, "P2"))
+    app.processEvents()
+    plot = win._plot
+    keys = list(plot._curves)
+    assert plot.visible_keys() == tuple(keys)
+    captured = []
+    plot.v_cursor_moved.connect(lambda c, rows: captured.append(rows))
+    plot.set_cursor_x(0.3)
+    app.processEvents()
+    assert len(captured[-1]) == 2
+    # simulate the legend swatch click (pyqtgraph toggles visibility,
+    # then emits sigSampleClicked with the curve)
+    curve = plot._curves[keys[0]]
+    curve.setVisible(False)
+    plot._legend.sigSampleClicked.emit(curve)
+    app.processEvents()
+    assert plot.visible_keys() == (keys[1],)
+    assert [r[0] for r in captured[-1]] == [keys[1]]   # readout follows
+    assert not plot._zoom_curves[keys[0]].isVisible()  # twin mirrored
+    assert [r[0] for r in plot.measures_rows(0.0, 0.9)] == [keys[1]]
+    # toggle back on
+    curve.setVisible(True)
+    plot._legend.sigSampleClicked.emit(curve)
+    app.processEvents()
+    assert plot.visible_keys() == tuple(keys)
+    assert len(captured[-1]) == 2
+    assert plot._zoom_curves[keys[0]].isVisible()
+
+
 def test_file_menu_actions(win):
     # NOTE: never call QAction.menu() here — the PySide6 binding hands the
     # menu's ownership to Python and the QMenu gets deleted with the

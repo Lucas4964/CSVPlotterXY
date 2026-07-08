@@ -513,7 +513,7 @@ class MainWindow(QMainWindow):
         if self._measures is None or not self._measures.isVisible():
             return
         key = (round(lo, 12), round(hi, 12), self._plot._x_key,
-               frozenset(self._plot._curves))
+               self._plot.visible_keys())
         if key == self._measures_cache_key:
             return
         self._measures_cache_key = key
