@@ -690,6 +690,11 @@ class PlotArea(QWidget):
         lo, hi = self._measure_region.getRegion()
         self.measure_region_changing.emit(float(lo), float(hi))
 
+    def clear_color_overrides(self) -> None:
+        """Forget user-picked series colors (used when a saved project
+        replaces the session — its own colors are applied afterwards)."""
+        self._color_override.clear()
+
     def visible_keys(self) -> tuple[str, ...]:
         """Keys of the curves currently shown (legend can hide curves)."""
         return tuple(k for k, c in self._curves.items() if c.isVisible())

@@ -23,6 +23,7 @@ from .project import INDEX_NAME, Project, ProjectError, SeriesRef
 from .readout_panel import CursorReadout
 from .series_dialog import SeriesDialog
 from .series_panel import PanelGroup, PanelSeries, SeriesPanel
+from .session import SessionError, load_session, save_session
 from .themes import THEMES, apply_app_theme
 
 
@@ -44,6 +45,9 @@ class MainWindow(QMainWindow):
         self._file_menu.addAction("Abrir CSV…", self._open_file_dialog)
         self._recent_menu = self._file_menu.addMenu("Recentes")
         self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
+        self._file_menu.addSeparator()
+        self._file_menu.addAction("Abrir projeto…", self._open_project_dialog)
+        self._file_menu.addAction("Salvar projeto…", self._save_project_dialog)
         self._file_menu.addSeparator()
         self._file_menu.addAction("Exportar imagem…", self._export_image_dialog)
         self._file_menu.addAction("Copiar imagem", self._copy_image)
@@ -275,10 +279,75 @@ class MainWindow(QMainWindow):
             action.triggered.connect(
                 lambda checked=False, p=path: self.open_path(p))
 
+    # ------------------------------------------------------ project files
+
+    def reset_session(self) -> None:
+        """Drop every loaded file, custom series and color override —
+        the blank state a project load starts from."""
+        self._project = Project()
+        self._plot.clear()
+        self._plot.clear_color_overrides()
+        self._measures_cache_key = None
+        self._refresh_panel()
+
+    def load_project_file(self, path: str) -> None:
+        try:
+            warnings = load_session(self, path)
+        except SessionError as e:
+            QMessageBox.critical(self, "Abrir projeto", str(e))
+            return
+        self._set_project_path(path)
+        if warnings:
+            box = QMessageBox(QMessageBox.Icon.Warning, "Abrir projeto",
+                              "O projeto foi aberto com avisos:\n\n"
+                              + "\n".join(warnings), parent=self)
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            box.show()  # non-modal: loading already finished
+        self.statusBar().showMessage(
+            f"Projeto aberto: {os.path.basename(path)}", 5000)
+
+    def _set_project_path(self, path: str) -> None:
+        self._project_path = path
+        self.setWindowTitle(
+            f"CSVPlotterXY {__version__} — {os.path.basename(path)}")
+
+    def _open_project_dialog(self) -> None:
+        last_dir = str(self._settings.value("last_dir", ""))
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Abrir projeto", last_dir,
+            "Projeto CSVPlotterXY (*.plotxy)")
+        if path:
+            self.load_project_file(path)
+
+    def _save_project_dialog(self) -> None:
+        if not self._project.files():
+            QMessageBox.information(self, "Salvar projeto",
+                                    "Carregue pelo menos um CSV primeiro.")
+            return
+        last_dir = str(self._settings.value("last_dir", ""))
+        suggested = os.path.join(last_dir, os.path.basename(
+            getattr(self, "_project_path", "") or "projeto.plotxy"))
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Salvar projeto", suggested,
+            "Projeto CSVPlotterXY (*.plotxy)")
+        if not path:
+            return
+        if not path.lower().endswith(".plotxy"):
+            path += ".plotxy"
+        try:
+            save_session(self, path)
+        except SessionError as e:
+            QMessageBox.critical(self, "Salvar projeto", str(e))
+            return
+        self._set_project_path(path)
+        self.statusBar().showMessage(
+            f"Projeto salvo: {os.path.basename(path)}", 5000)
+
     # --------------------------------------------------------- drag & drop
 
     def dragEnterEvent(self, event) -> None:
-        if any(u.isLocalFile() and u.toLocalFile().lower().endswith(".csv")
+        if any(u.isLocalFile()
+               and u.toLocalFile().lower().endswith((".csv", ".plotxy"))
                for u in event.mimeData().urls()):
             event.acceptProposedAction()
 
@@ -288,6 +357,8 @@ class MainWindow(QMainWindow):
                 path = url.toLocalFile()
                 if path.lower().endswith(".csv"):
                     self.open_path(path)
+                elif path.lower().endswith(".plotxy"):
+                    self.load_project_file(path)
         event.acceptProposedAction()
 
     # ------------------------------------------------------- image export
@@ -562,7 +633,10 @@ class MainWindow(QMainWindow):
                 "Cursor posicionado em " + ", ".join(moved), 4000)
 
     def _toggle_theme(self) -> None:
-        self._theme = THEMES["light" if self._theme.name == "dark" else "dark"]
+        self.set_theme("light" if self._theme.name == "dark" else "dark")
+
+    def set_theme(self, name: str) -> None:
+        self._theme = THEMES.get(name, self._theme)
         self._settings.setValue("theme", self._theme.name)
         self._apply_theme()
 

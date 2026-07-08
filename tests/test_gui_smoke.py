@@ -1349,6 +1349,71 @@ def test_drag_drop_csv(win, app, tmp_path):
     assert not ev2.accepted
 
 
+def test_project_save_load_roundtrip(win, app, tmp_path):
+    from plotxy_app.session import load_session, save_session
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    win._project.add_custom("soma", "P1 + P2")
+    win._refresh_panel()
+    win._panel.check_ref(SeriesRef("custom", "", "soma"))
+    app.processEvents()
+    key_p1 = SeriesRef("column", f1, "P1").key()
+    win._plot.set_curve_color(key_p1, "#123456")
+    win._plot.set_manual_ranges(0.1, 0.7, -1.0, 12.0)
+    proj = tmp_path / "sessao.plotxy"
+    save_session(win, str(proj))
+    assert proj.exists()
+
+    win2 = MainWindow()
+    win2.show()
+    warnings = load_session(win2, str(proj))
+    app.processEvents()
+    assert warnings == []
+    names = [os.path.basename(ds.source_path)
+             for _, ds in win2._project.files()]
+    assert names == ["a.csv", "b.csv"]
+    nf1 = file_ids(win2)[0]
+    assert win2._panel.x_ref() == SeriesRef("column", nf1, "time")
+    ykeys = {r.key() for r in win2._panel.y_refs()}
+    assert SeriesRef("column", nf1, "P1").key() in ykeys
+    assert SeriesRef("custom", "", "soma").key() in ykeys
+    assert any(c.name == "soma" and c.expression == "P1 + P2"
+               for c in win2._project.custom())
+    assert win2._plot._color_of[SeriesRef("column", nf1, "P1").key()] == "#123456"
+    x0, x1, y0, y1 = win2._plot.view_ranges()
+    assert abs(x0 - 0.1) < 1e-6 and abs(x1 - 0.7) < 1e-6
+    assert abs(y0 - -1.0) < 1e-6 and abs(y1 - 12.0) < 1e-6
+    win2.close()
+
+
+def test_project_load_with_missing_file(win, app, tmp_path, csv_b):
+    from plotxy_app.session import load_session, save_session
+    proj = tmp_path / "faltando.plotxy"
+    save_session(win, str(proj))
+    os.remove(csv_b)
+    win2 = MainWindow()
+    win2.show()
+    warnings = load_session(win2, str(proj))
+    app.processEvents()
+    assert len(warnings) == 1 and "b.csv" in warnings[0]
+    names = [os.path.basename(ds.source_path)
+             for _, ds in win2._project.files()]
+    assert names == ["a.csv"]
+    win2.close()
+
+
+def test_project_load_invalid_keeps_session(win, tmp_path):
+    from plotxy_app.session import SessionError, load_session
+    bad = tmp_path / "ruim.plotxy"
+    bad.write_text("{isso não é json", encoding="utf-8")
+    files_before = len(win._project.files())
+    with pytest.raises(SessionError):
+        load_session(win, str(bad))
+    assert len(win._project.files()) == files_before  # session untouched
+
+
 def test_legend_toggle_hides_series_everywhere(win, app):
     f1 = file_ids(win)[0]
     win._panel.set_x_ref(SeriesRef("column", f1, "time"))
