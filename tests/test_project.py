@@ -169,3 +169,16 @@ def test_derivative_snapshots_x_axis(proj):
     proj.set_x_axis(None)
     with pytest.raises(ProjectError, match="eixo X"):
         proj.add_custom("bad", "D(P1)")
+
+
+def test_generator_only_custom_series(proj):
+    proj.add_file(make_ds(["time", "v"], 5, "a.csv"))
+    cs, truncated = proj.add_custom("rampa", "linspace(0, 1, 20)")
+    assert len(cs.values) == 20 and not truncated
+    assert np.allclose(cs.values, np.linspace(0, 1, 20))
+    assert cs.deps == frozenset()
+    assert cs.dep_files == frozenset() and cs.dep_customs == frozenset()
+    # usable as a dependency of another custom (same length required)
+    cs2, _ = proj.add_custom("dobro", "rampa * 2")
+    assert np.allclose(cs2.values, np.linspace(0, 1, 20) * 2)
+    assert cs2.dep_customs == frozenset({"rampa"})

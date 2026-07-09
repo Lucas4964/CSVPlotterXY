@@ -40,6 +40,8 @@ class SeriesDialog(QDialog):
                       "sin()  cos()  tan()  exp()  log()  log10().\n"
                       "D(série) = derivada em relação ao eixo X atual.\n"
                       "I(série) = integral acumulada em relação ao eixo X atual.\n"
+                      "linspace(início, fim, nº de pontos) e "
+                      "arange(início, fim, passo) geram séries novas.\n"
                       "Duplo clique numa série abaixo insere o nome na "
                       "expressão (aspas automáticas quando necessário).")
         hint.setWordWrap(True)

@@ -142,6 +142,113 @@ def test_integral_errors():
         evaluate("I(A, B)", resolver, x=X)
 
 
+def test_derivative_with_duplicated_x():
+    # Modelica/ATP event points: two samples at the same instant
+    X = np.array([0.0, 1.0, 2.0, 2.0, 3.0, 4.0])
+    Y = np.array([0.0, 2.0, 4.0, 10.0, 12.0, 14.0])  # jump at x=2
+    res = {"j": Y}
+    vals, _, _ = evaluate("D(j)", lambda k: res[k], x=X)
+    assert np.all(np.isfinite(vals))          # no inf/NaN poisoning
+    # each side of the jump uses its own segment (slope 2 everywhere)
+    assert np.allclose(vals, 2.0)
+
+    # a continuous sine sampled with duplicated instants still gives
+    # a clean derivative ~ w*cos
+    w = 2 * np.pi * 5.0
+    t = np.linspace(0.0, 1.0, 2001)
+    t = np.insert(t, [500, 1200], [t[500], t[1200]])  # duplicate 2 points
+    y = np.sin(w * t)
+    vals, _, _ = evaluate("D(s)", lambda k: {"s": y}[k], x=t)
+    assert np.all(np.isfinite(vals))
+    assert np.max(np.abs(vals - w * np.cos(w * t))) < w * 0.01
+
+    # x repeated 3+ times: the isolated middle sample has no derivative
+    X3 = np.array([0.0, 1.0, 1.0, 1.0, 2.0])
+    Y3 = np.array([0.0, 1.0, 5.0, 9.0, 10.0])
+    vals, _, _ = evaluate("D(a3)", lambda k: {"a3": Y3}[k], x=X3)
+    assert np.isnan(vals[2]) and np.isfinite(vals[[0, 1, 3, 4]]).all()
+
+
+def test_integral_with_duplicated_x_and_nan():
+    # a jump at duplicated x adds no area
+    X = np.array([0.0, 1.0, 1.0, 2.0])
+    Y = np.array([1.0, 1.0, 5.0, 5.0])
+    vals, _, _ = evaluate("I(step)", lambda k: {"step": Y}[k], x=X)
+    assert np.allclose(vals, [0.0, 1.0, 1.0, 6.0])
+    # one NaN sample must not wipe the rest of the integral
+    X2 = np.array([0.0, 1.0, 2.0, 3.0, 4.0])
+    Y2 = np.array([1.0, 1.0, np.nan, 1.0, 1.0])
+    vals, _, _ = evaluate("I(g)", lambda k: {"g": Y2}[k], x=X2)
+    assert np.isfinite(vals).all()
+    assert vals[-1] == 2.0   # the two NaN-adjacent segments contribute 0
+
+
+def test_derivative_integral_sampling_intervals():
+    # checklist: consistent results across sampling rates (uniform and not)
+    for n in (101, 10001):
+        t = np.linspace(0.0, 1.0, n)
+        y = t ** 2
+        d, _, _ = evaluate("D(q)", lambda k: {"q": y}[k], x=t)
+        assert np.max(np.abs(d - 2 * t)) < 2e-2
+        i, _, _ = evaluate("I(q)", lambda k: {"q": y}[k], x=t)
+        assert np.max(np.abs(i - t ** 3 / 3)) < 2e-2
+    rng = np.random.default_rng(3)
+    t = np.sort(rng.uniform(0.0, 1.0, 4001))
+    y = 3.0 * t
+    d, _, _ = evaluate("D(r)", lambda k: {"r": y}[k], x=t)
+    assert np.allclose(d, 3.0)
+    i, _, _ = evaluate("I(r)", lambda k: {"r": y}[k], x=t)
+    assert np.max(np.abs(i - 1.5 * (t ** 2 - t[0] ** 2))) < 1e-6
+
+
+def test_generators_linspace_arange():
+    vals, names, truncated = ev("linspace(0, 10, 11)")
+    assert np.allclose(vals, np.linspace(0, 10, 11))
+    assert names == set() and not truncated
+    assert np.allclose(ev("linspace(0, 1)")[0], np.linspace(0, 1, 50))
+    assert np.allclose(ev("arange(5)")[0], np.arange(5.0))
+    assert np.allclose(ev("arange(1, 4)")[0], np.arange(1.0, 4.0))
+    assert np.allclose(ev("arange(0, 10, 0.5)")[0], np.arange(0, 10, 0.5))
+    # composition with functions, operators and other generators
+    assert np.allclose(ev("sin(linspace(0, 6.28, 100))")[0],
+                       np.sin(np.linspace(0, 6.28, 100)))
+    assert np.allclose(ev("linspace(0, 1, 10) + arange(10)")[0],
+                       np.linspace(0, 1, 10) + np.arange(10.0))
+    assert np.allclose(ev("2 * linspace(0, 1, 5) + 1")[0],
+                       2 * np.linspace(0, 1, 5) + 1)
+    # same-length series mix works; D() over a generator works
+    assert np.allclose(ev("A + linspace(0, 1, 4)")[0],
+                       A + np.linspace(0, 1, 4))
+    X = np.array([0.0, 1.0, 2.0, 3.0])
+    vals, _, _ = evaluate("D(linspace(0, 9, 4))", resolver, x=X)
+    assert np.allclose(vals, 3.0)
+    # announced as known functions
+    known = _known_from_error()
+    assert "linspace" in known and "arange" in known
+
+
+def test_generator_errors():
+    with pytest.raises(ExpressionError, match="apenas números"):
+        ev("linspace(A, 1, 10)")
+    with pytest.raises(ExpressionError, match="inteiro"):
+        ev("linspace(0, 1, 2.5)")
+    with pytest.raises(ExpressionError, match="inteiro"):
+        ev("linspace(0, 1, 1)")
+    with pytest.raises(ExpressionError, match="passo"):
+        ev("arange(0, 1, 0)")
+    with pytest.raises(ExpressionError, match="máximo"):
+        ev("arange(0, 1e12)")
+    with pytest.raises(ExpressionError, match="intervalo vazio"):
+        ev("arange(10, 0, 1)")
+    with pytest.raises(ExpressionError, match="2 ou 3 argumentos"):
+        ev("linspace(1)")
+    with pytest.raises(ExpressionError, match="Tamanhos incompatíveis"):
+        ev("A + linspace(0, 1, 10)")   # A has 4 points
+    # scalar-only expressions are still rejected
+    with pytest.raises(ExpressionError, match="pelo menos uma série"):
+        ev("2 + 2")
+
+
 def test_string_reference():
     vals, names, _ = ev('"der(v)" + 1')
     assert np.allclose(vals, WEIRD + 1)

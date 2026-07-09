@@ -36,9 +36,44 @@ FUNCTIONS: dict[str, Callable] = {
 # I(series) = cumulative integral (trapezoid) with respect to the X axis.
 _X_FUNCS = {"D", "I"}
 
+# Series generators: build a brand-new series from numeric arguments
+# (numpy.linspace / numpy.arange exposed to the expression box).
+_GEN_FUNCS = {"linspace", "arange"}
+_GEN_MAX_POINTS = 10_000_000  # keep a typo from freezing the UI
+
 
 def _known_functions() -> str:
-    return ", ".join(sorted(set(FUNCTIONS) | _X_FUNCS))
+    return ", ".join(sorted(set(FUNCTIONS) | _X_FUNCS | _GEN_FUNCS))
+
+
+def _derivative(y: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """np.gradient robust to repeated x values (Modelica/ATP exports
+    emit two samples at the same instant on discontinuity events, so
+    dx = 0 there): the derivative is computed per strictly-monotonic
+    run, with one-sided differences at the event edges — no division by
+    zero and no spike leaking across the jump. Single-point runs (x
+    repeated 3+ times) yield NaN."""
+    dx = np.diff(x)
+    if not np.any(dx == 0):
+        return np.gradient(y, x)
+    out = np.full_like(y, np.nan)
+    breaks = np.nonzero(dx == 0)[0] + 1
+    starts = np.concatenate(([0], breaks))
+    ends = np.concatenate((breaks, [len(x)]))
+    for s, e in zip(starts, ends):
+        if e - s >= 2:
+            out[s:e] = np.gradient(y[s:e], x[s:e])
+    return out
+
+
+def _integral(y: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Cumulative trapezoid starting at 0, same length as y. Repeated x
+    contributes zero area (jumps integrate correctly) and non-finite
+    segments are skipped, so one NaN sample doesn't wipe the rest of
+    the integral."""
+    seg = np.diff(x) * (y[:-1] + y[1:]) / 2.0
+    seg = np.where(np.isfinite(seg), seg, 0.0)
+    return np.concatenate(([0.0], np.cumsum(seg)))
 
 _BINOPS = {
     ast.Add: operator.add,
@@ -62,25 +97,30 @@ def _parse(expr: str) -> ast.Expression:
         raise ExpressionError(f"Expressão inválida: {e.msg}") from e
 
 
-def _validate_and_collect(node: ast.AST, names: set[str]) -> None:
+def _validate_and_collect(node: ast.AST, names: set[str],
+                          flags: set[str] | None = None) -> None:
     """Walk the tree, rejecting anything outside the whitelist and
-    collecting series references into `names`."""
+    collecting series references into `names`. When a generator call
+    (linspace/arange) is present, "gen" is added to `flags`."""
+    if flags is None:
+        flags = set()
     if isinstance(node, ast.Expression):
-        _validate_and_collect(node.body, names)
+        _validate_and_collect(node.body, names, flags)
     elif isinstance(node, ast.BinOp):
         if type(node.op) not in _BINOPS:
             raise ExpressionError(
                 f"Operador não suportado: {type(node.op).__name__}")
-        _validate_and_collect(node.left, names)
-        _validate_and_collect(node.right, names)
+        _validate_and_collect(node.left, names, flags)
+        _validate_and_collect(node.right, names, flags)
     elif isinstance(node, ast.UnaryOp):
         if type(node.op) not in _UNARYOPS:
             raise ExpressionError(
                 f"Operador não suportado: {type(node.op).__name__}")
-        _validate_and_collect(node.operand, names)
+        _validate_and_collect(node.operand, names, flags)
     elif isinstance(node, ast.Call):
         is_known = (isinstance(node.func, ast.Name)
-                    and (node.func.id in FUNCTIONS or node.func.id in _X_FUNCS))
+                    and (node.func.id in FUNCTIONS or node.func.id in _X_FUNCS
+                         or node.func.id in _GEN_FUNCS))
         if not is_known:
             fname = (node.func.id if isinstance(node.func, ast.Name)
                      else ast.dump(node.func))
@@ -92,8 +132,17 @@ def _validate_and_collect(node: ast.AST, names: set[str]) -> None:
         if node.func.id in _X_FUNCS and len(node.args) != 1:
             raise ExpressionError(
                 f"{node.func.id}() espera exatamente 1 argumento.")
+        if node.func.id == "linspace" and not 2 <= len(node.args) <= 3:
+            raise ExpressionError(
+                "linspace() espera 2 ou 3 argumentos: "
+                "início, fim e nº de pontos.")
+        if node.func.id == "arange" and not 1 <= len(node.args) <= 3:
+            raise ExpressionError(
+                "arange() espera 1 a 3 argumentos: início, fim e passo.")
+        if node.func.id in _GEN_FUNCS:
+            flags.add("gen")
         for arg in node.args:
-            _validate_and_collect(arg, names)
+            _validate_and_collect(arg, names, flags)
     elif isinstance(node, ast.Name):
         names.add(node.id)
     elif isinstance(node, ast.Constant):
@@ -131,14 +180,43 @@ def _eval_node(node: ast.AST, series: dict[str, np.ndarray],
             fname = node.func.id
             if x is None:
                 raise ExpressionError(f"{fname}() requer um eixo X selecionado.")
-            if len(x) < 2:
-                raise ExpressionError(f"Série curta demais para {fname}().")
             y = np.asarray(_eval_node(node.args[0], series, x), dtype=np.float64)
-            if fname == "D":
-                return np.gradient(y, x)
-            # I(): cumulative trapezoid, same length as y, starting at 0
-            seg = np.diff(x) * (y[:-1] + y[1:]) / 2.0
-            return np.concatenate(([0.0], np.cumsum(seg)))
+            if y.ndim != 1:
+                raise ExpressionError(f"{fname}() espera uma série.")
+            n = min(len(x), len(y))   # generators may differ from x's length
+            if n < 2:
+                raise ExpressionError(f"Série curta demais para {fname}().")
+            xs, ys = x[:n], y[:n]
+            return _derivative(ys, xs) if fname == "D" else _integral(ys, xs)
+        if node.func.id in _GEN_FUNCS:
+            fname = node.func.id
+            args = [_eval_node(a, series, x) for a in node.args]
+            if any(isinstance(a, np.ndarray) for a in args):
+                raise ExpressionError(
+                    f"{fname}() aceita apenas números como argumentos.")
+            vals = [float(a) for a in args]
+            if fname == "linspace":
+                num = vals[2] if len(vals) == 3 else 50.0
+                if not (np.isfinite(num) and float(num).is_integer()
+                        and 2 <= num <= _GEN_MAX_POINTS):
+                    raise ExpressionError(
+                        "linspace(): o nº de pontos deve ser um inteiro "
+                        f"entre 2 e {_GEN_MAX_POINTS}.")
+                return np.linspace(vals[0], vals[1], int(num))
+            start, stop, step = ((0.0, vals[0], 1.0) if len(vals) == 1 else
+                                 (vals[0], vals[1], 1.0) if len(vals) == 2
+                                 else (vals[0], vals[1], vals[2]))
+            if step == 0:
+                raise ExpressionError("arange(): o passo não pode ser 0.")
+            n_est = (stop - start) / step
+            if not np.isfinite(n_est) or n_est > _GEN_MAX_POINTS:
+                raise ExpressionError(
+                    f"arange(): máximo de {_GEN_MAX_POINTS} pontos.")
+            if n_est <= 0:
+                raise ExpressionError(
+                    "arange(): intervalo vazio (verifique início, fim e "
+                    "o sinal do passo).")
+            return np.arange(start, stop, step, dtype=np.float64)
         args = [_eval_node(a, series, x) for a in node.args]
         return FUNCTIONS[node.func.id](*args)
     if isinstance(node, ast.Name):
@@ -163,10 +241,12 @@ def evaluate(expr: str, resolver: Callable[[str], np.ndarray],
     """
     tree = _parse(expr)
     names: set[str] = set()
-    _validate_and_collect(tree, names)
-    if not names:
+    flags: set[str] = set()
+    _validate_and_collect(tree, names, flags)
+    if not names and "gen" not in flags:
         raise ExpressionError(
-            "A expressão deve referenciar pelo menos uma série.")
+            "A expressão deve referenciar pelo menos uma série "
+            "ou usar um gerador (linspace/arange).")
 
     arrays: dict[str, np.ndarray] = {}
     for name in names:
@@ -179,13 +259,20 @@ def evaluate(expr: str, resolver: Callable[[str], np.ndarray],
     if x is not None:
         x = np.asarray(x, dtype=np.float64)
         lengths.append(len(x))
-    min_len = min(lengths)
+    min_len = min(lengths) if lengths else 0
     truncated = any(ln > min_len for ln in lengths)
     series = {n: a[:min_len] for n, a in arrays.items()}
     x_trunc = x[:min_len] if x is not None else None
 
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        result = _eval_node(tree, series, x_trunc)
+        try:
+            result = _eval_node(tree, series, x_trunc)
+        except ValueError:
+            # numpy broadcast failure: a generator's length differs from
+            # the (truncated) series it is combined with
+            raise ExpressionError(
+                "Tamanhos incompatíveis na expressão — ajuste o nº de "
+                "pontos do gerador para casar com as séries.") from None
 
     values = np.asarray(result, dtype=np.float64)
     if values.ndim != 1:
