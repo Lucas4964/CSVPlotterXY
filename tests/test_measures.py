@@ -87,3 +87,21 @@ def test_single_sample():
     assert m["n"] == 1
     assert m["max"] == m["min"] == m["mean"] == 7.0
     assert m["dx"] == 0.0 and m["dy"] == 0.0 and m["area"] == 0.0
+
+
+def test_rms():
+    # sine over whole periods: RMS = A / sqrt(2)
+    a = 5.0
+    x = np.linspace(0.0, 1.0, 10001)          # 1 s
+    y = a * np.sin(2 * np.pi * 10 * x)        # 10 whole periods
+    m = compute_measures(x, y, 0.0, 1.0, _INC)
+    assert np.isclose(m["rms"], a / np.sqrt(2), rtol=1e-3)
+    # constant: RMS = |c|
+    c = np.full(50, -3.0)
+    m = compute_measures(np.arange(50.0), c, 0.0, 49.0, _INC)
+    assert np.isclose(m["rms"], 3.0)
+    # partial interval uses only the sliced samples
+    x2 = np.array([0.0, 1.0, 2.0, 3.0])
+    y2 = np.array([1.0, 2.0, 100.0, 100.0])
+    m = compute_measures(x2, y2, 0.0, 1.0, _INC)
+    assert np.isclose(m["rms"], np.sqrt((1.0 + 4.0) / 2))

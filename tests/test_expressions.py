@@ -249,6 +249,55 @@ def test_generator_errors():
         ev("2 + 2")
 
 
+def test_scalar_reductions():
+    assert np.allclose(ev("A / max(A)")[0], A / A.max())
+    assert np.allclose(ev("A - mean(A)")[0], A - A.mean())
+    assert np.allclose(ev("A - min(A)")[0], A - A.min())
+    assert np.allclose(ev("A / rms(A)")[0], A / np.sqrt(np.mean(A ** 2)))
+    # reductions ignore NaN samples
+    nan = {"g": np.array([1.0, np.nan, 3.0])}
+    vals, _, _ = evaluate("g / max(g)", lambda k: nan[k])
+    assert np.isclose(vals[0], 1.0 / 3.0) and np.isclose(vals[2], 1.0)
+    # all announced as known
+    known = _known_from_error()
+    for f in ("max", "min", "mean", "rms", "shift"):
+        assert f in known
+
+
+def test_scalar_only_result_rejected():
+    with pytest.raises(ExpressionError, match="não resultou em uma série"):
+        ev("max(A)")
+
+
+def test_function_arity_enforced():
+    with pytest.raises(ExpressionError, match="1 argumento"):
+        ev("max(A, B)")
+    # abs(A, B) would be np.abs(A, out=B) and silently overwrite B's data
+    with pytest.raises(ExpressionError, match="1 argumento"):
+        ev("abs(A, B)")
+    with pytest.raises(ExpressionError, match="2 argumentos"):
+        ev("shift(A)")
+
+
+def test_shift():
+    vals, _, _ = ev("shift(A, 1)")
+    assert np.isnan(vals[0]) and np.allclose(vals[1:], A[:-1])
+    vals, _, _ = ev("shift(A, -1)")
+    assert np.isnan(vals[-1]) and np.allclose(vals[:-1], A[1:])
+    assert np.allclose(ev("shift(A, 0)")[0], A)
+    vals, _, _ = ev("shift(A, 10)")     # |n| >= len -> all NaN
+    assert np.isnan(vals).all()
+    # composition: first difference via shift
+    vals, _, _ = ev("A - shift(A, 1)")
+    assert np.isnan(vals[0]) and np.allclose(vals[1:], np.diff(A))
+    # accepts 2.0, rejects 2.5 and series as n
+    assert np.allclose(ev("shift(A, 2.0)")[0][2:], A[:-2])
+    with pytest.raises(ExpressionError, match="inteiro"):
+        ev("shift(A, 2.5)")
+    with pytest.raises(ExpressionError, match="inteiro"):
+        ev("shift(A, B)")
+
+
 def test_string_reference():
     vals, names, _ = ev('"der(v)" + 1')
     assert np.allclose(vals, WEIRD + 1)

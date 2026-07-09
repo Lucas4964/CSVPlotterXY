@@ -701,7 +701,9 @@ def test_measures_window_flow(win, app):
     assert float(tbl.item(row, 2).text()) == p1[sel].max()      # Máx
     assert float(tbl.item(row, 3).text()) == p1[sel].min()      # Mín
     assert _np.isclose(float(tbl.item(row, 4).text()), p1[sel].mean())
-    assert _np.isclose(float(tbl.item(row, 7).text()),
+    assert _np.isclose(float(tbl.item(row, 5).text()),
+                       _np.sqrt(_np.mean(p1[sel] ** 2)))        # RMS
+    assert _np.isclose(float(tbl.item(row, 8).text()),
                        _np.trapezoid(p1[sel], t[sel]))          # Área
 
     # cache: same interval again -> measures_rows NOT called
@@ -1452,6 +1454,35 @@ def test_spectrum_window_follows_selection_and_legend(win, app):
     app.processEvents()
     assert len(win._spectrum._curves) == 1
     win._spectrum.close()
+    app.processEvents()
+
+
+def test_spectrum_cursor_reads_peak(win, app, tmp_path):
+    fs, f0, n = 1000.0, 50.0, 1000
+    p = tmp_path / "seno.csv"
+    rows = "\n".join(f"{i / fs},{3.0 * np.sin(2 * np.pi * f0 * i / fs):.9f}"
+                     for i in range(n))
+    p.write_text('"t","v"\n' + rows)
+    win.open_path(str(p))
+    f3 = file_ids(win)[-1]
+    win._panel._deselect_all()
+    win._panel.set_x_ref(SeriesRef("column", f3, "t"))
+    win._panel.check_ref(SeriesRef("column", f3, "v"))
+    app.processEvents()
+    win._open_spectrum()
+    app.processEvents()
+    sw = win._spectrum
+    # cursor starts on the strongest peak (50 Hz) with a useful reading
+    assert sw._cursor.isVisible()
+    assert abs(sw._cursor.value() - f0) < 1.5
+    text = sw._readout.text()
+    assert "f = 50" in text
+    assert ">v</span>: 3" in text          # amplitude ~3 at the peak bin
+    # dragging updates the reading to the new bin
+    sw._cursor.setValue(100.0)
+    app.processEvents()
+    assert "f = 100" in sw._readout.text()
+    sw.close()
     app.processEvents()
 
 

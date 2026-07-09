@@ -42,8 +42,46 @@ _GEN_FUNCS = {"linspace", "arange"}
 _GEN_MAX_POINTS = 10_000_000  # keep a typo from freezing the UI
 
 
+def _finite_reduce(reducer: Callable) -> Callable:
+    """Reduction over the finite samples only (no RuntimeWarning on NaN
+    data); NaN when nothing is finite. The scalar result broadcasts, so
+    e.g. A / max(A) normalizes a series."""
+    def wrapped(a) -> float:
+        f = np.asarray(a, dtype=np.float64).ravel()
+        f = f[np.isfinite(f)]
+        return float(reducer(f)) if len(f) else float("nan")
+    return wrapped
+
+
+# Scalar reductions: series -> number (usable inside larger expressions).
+_SCALAR_FUNCS: dict[str, Callable] = {
+    "max": _finite_reduce(np.max),
+    "min": _finite_reduce(np.min),
+    "mean": _finite_reduce(np.mean),
+    "rms": _finite_reduce(lambda f: np.sqrt(np.mean(np.square(f)))),
+}
+
+# shift(series, n): displace the series by n samples (NaN-padded ends).
+_SHIFT_FUNCS = {"shift"}
+
+
 def _known_functions() -> str:
-    return ", ".join(sorted(set(FUNCTIONS) | _X_FUNCS | _GEN_FUNCS))
+    return ", ".join(sorted(set(FUNCTIONS) | _X_FUNCS | _GEN_FUNCS
+                            | set(_SCALAR_FUNCS) | _SHIFT_FUNCS))
+
+
+def _shift(y: np.ndarray, n: int) -> np.ndarray:
+    """Same-length copy of y displaced n samples: positive n delays the
+    series (moves it right, NaN at the start), negative advances it."""
+    if n == 0:
+        return y
+    out = np.full_like(y, np.nan)
+    if abs(n) < len(y):
+        if n > 0:
+            out[n:] = y[:-n]
+        else:
+            out[:n] = y[-n:]
+    return out
 
 
 def _derivative(y: np.ndarray, x: np.ndarray) -> np.ndarray:
@@ -120,7 +158,9 @@ def _validate_and_collect(node: ast.AST, names: set[str],
     elif isinstance(node, ast.Call):
         is_known = (isinstance(node.func, ast.Name)
                     and (node.func.id in FUNCTIONS or node.func.id in _X_FUNCS
-                         or node.func.id in _GEN_FUNCS))
+                         or node.func.id in _GEN_FUNCS
+                         or node.func.id in _SCALAR_FUNCS
+                         or node.func.id in _SHIFT_FUNCS))
         if not is_known:
             fname = (node.func.id if isinstance(node.func, ast.Name)
                      else ast.dump(node.func))
@@ -129,9 +169,13 @@ def _validate_and_collect(node: ast.AST, names: set[str],
         if node.keywords:
             raise ExpressionError(
                 "Argumentos nomeados não são suportados em funções.")
-        if node.func.id in _X_FUNCS and len(node.args) != 1:
+        one_arg = (set(FUNCTIONS) | _X_FUNCS | set(_SCALAR_FUNCS))
+        if node.func.id in one_arg and len(node.args) != 1:
             raise ExpressionError(
                 f"{node.func.id}() espera exatamente 1 argumento.")
+        if node.func.id in _SHIFT_FUNCS and len(node.args) != 2:
+            raise ExpressionError(
+                "shift() espera 2 argumentos: a série e o nº de amostras.")
         if node.func.id == "linspace" and not 2 <= len(node.args) <= 3:
             raise ExpressionError(
                 "linspace() espera 2 ou 3 argumentos: "
@@ -217,6 +261,20 @@ def _eval_node(node: ast.AST, series: dict[str, np.ndarray],
                     "arange(): intervalo vazio (verifique início, fim e "
                     "o sinal do passo).")
             return np.arange(start, stop, step, dtype=np.float64)
+        if node.func.id in _SHIFT_FUNCS:
+            y = np.asarray(_eval_node(node.args[0], series, x),
+                           dtype=np.float64)
+            if y.ndim != 1:
+                raise ExpressionError("shift() espera uma série como "
+                                      "primeiro argumento.")
+            n = _eval_node(node.args[1], series, x)
+            if isinstance(n, np.ndarray) or not float(n).is_integer():
+                raise ExpressionError("shift(): o nº de amostras deve ser "
+                                      "um número inteiro.")
+            return _shift(y, int(n))
+        if node.func.id in _SCALAR_FUNCS:
+            return _SCALAR_FUNCS[node.func.id](
+                _eval_node(node.args[0], series, x))
         args = [_eval_node(a, series, x) for a in node.args]
         return FUNCTIONS[node.func.id](*args)
     if isinstance(node, ast.Name):

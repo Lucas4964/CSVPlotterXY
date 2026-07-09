@@ -20,14 +20,15 @@ from .readout_panel import _COLOR_ROLE, _SWATCH_COLUMN_WIDTH, _SwatchDelegate
 
 _INCREASING, _DECREASING, _NON_MONOTONIC = 0, 1, 2
 
-COLUMNS = ["Máx", "Mín", "Média", "ΔX", "ΔY", "Área"]
-# table layout: [swatch(0) | Série(1) | Máx(2) | Mín(3) | Média | ΔX | ΔY | Área]
+COLUMNS = ["Máx", "Mín", "Média", "RMS", "ΔX", "ΔY", "Área"]
+# table layout: [swatch(0) | Série(1) | Máx(2) | Mín(3) | Média | RMS | …]
 _MAX_COL = 2
 _MIN_COL = 3
 _TOOLTIPS = {
     "Máx": "Maior valor de Y no intervalo",
     "Mín": "Menor valor de Y no intervalo",
     "Média": "Média dos valores de Y no intervalo",
+    "RMS": "Raiz do valor quadrático médio de Y no intervalo",
     "ΔX": "X final − X inicial (amostras dentro do intervalo)",
     "ΔY": "Y final − Y inicial (amostras dentro do intervalo)",
     "Área": "Integral trapezoidal de Y em relação a X (com sinal)",
@@ -73,6 +74,7 @@ def compute_measures(x: np.ndarray, y: np.ndarray, lo: float, hi: float,
         "max_x": float(xs[imax]),  # X where Y is maximal
         "min_x": float(xs[imin]),  # X where Y is minimal
         "mean": float(ys.mean()),
+        "rms": float(np.sqrt(np.mean(np.square(ys)))),
         "dx": float(xs[-1] - xs[0]),
         "dy": float(ys[-1] - ys[0]),
         "area": area,
@@ -166,7 +168,8 @@ class MeasuresWindow(QWidget):
             self._table.setItem(r, 1, QTableWidgetItem(label))
             values = (["—"] * len(COLUMNS) if m is None else
                       [f"{m['max']:.6g}", f"{m['min']:.6g}", f"{m['mean']:.6g}",
-                       f"{m['dx']:.6g}", f"{m['dy']:.6g}", f"{m['area']:.6g}"])
+                       f"{m['rms']:.6g}", f"{m['dx']:.6g}", f"{m['dy']:.6g}",
+                       f"{m['area']:.6g}"])
             for c, text in enumerate(values, start=2):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(
