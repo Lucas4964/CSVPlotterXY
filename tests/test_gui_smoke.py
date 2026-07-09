@@ -222,6 +222,41 @@ def test_legend_label_color_follows_theme(win, app):
     assert LIGHT.text.lower() not in legend_html()
 
 
+def test_deselect_all_keeps_files(win, app):
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    win._panel.check_ref(SeriesRef("column", f1, "P2"))
+    app.processEvents()
+    win._project.add_custom("soma", "P1 + P2")
+    win._refresh_panel()
+    win._panel.check_ref(SeriesRef("custom", "", "soma"))
+    app.processEvents()
+    assert len(win._plot._curves) == 3
+
+    win._panel._deselect_all()
+    app.processEvents()
+    # plot cleared, but nothing was unloaded/deleted
+    assert win._panel.y_refs() == []
+    assert win._plot._curves == {}
+    assert len(win._project.files()) == 2
+    assert any(c.name == "soma" for c in win._project.custom())
+    # the series are still there to be re-checked
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
+    app.processEvents()
+    assert len(win._plot._curves) == 1
+
+
+def test_fechar_tudo_moved_to_file_menu(win):
+    from PySide6.QtWidgets import QPushButton
+    texts = [a.text() for a in win._file_menu.actions()]
+    assert "Fechar tudo" in texts
+    # the panel no longer carries a reset button
+    panel_btns = [b.text() for b in win._panel.findChildren(QPushButton)]
+    assert "Fechar tudo" not in panel_btns
+    assert any("Desmarcar" in t for t in panel_btns)
+
+
 def test_reset_session_full(win, app):
     from plotxy_app import __version__
     f1 = file_ids(win)[0]

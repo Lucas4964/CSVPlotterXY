@@ -51,6 +51,8 @@ class MainWindow(QMainWindow):
         self._file_menu.addAction("Abrir projeto…", self._open_project_dialog)
         self._file_menu.addAction("Salvar projeto…", self._save_project_dialog)
         self._file_menu.addSeparator()
+        self._file_menu.addAction("Fechar tudo", self._on_reset_requested)
+        self._file_menu.addSeparator()
         self._file_menu.addAction("Exportar imagem…", self._export_image_dialog)
         self._file_menu.addAction("Copiar imagem", self._copy_image)
 
@@ -166,7 +168,6 @@ class MainWindow(QMainWindow):
         self._panel.new_series_requested.connect(self._on_new_series)
         self._panel.edit_series_requested.connect(self._on_edit_series)
         self._panel.delete_series_requested.connect(self._on_delete_series)
-        self._panel.reset_requested.connect(self._on_reset_requested)
         self._plot.v_cursor_moved.connect(self._v_readout.update_values)
         self._plot.h_cursor_moved.connect(self._h_readout.update_values)
         self._v_readout.color_change_requested.connect(self._plot.prompt_color)

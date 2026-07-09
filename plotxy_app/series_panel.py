@@ -45,7 +45,6 @@ class SeriesPanel(QWidget):
     new_series_requested = Signal()
     edit_series_requested = Signal(str)
     delete_series_requested = Signal(str)
-    reset_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -91,10 +90,12 @@ class SeriesPanel(QWidget):
         new_btn = QPushButton("Nova série…")
         new_btn.clicked.connect(self.new_series_requested)
         buttons.addWidget(new_btn)
-        clear_btn = QPushButton("Fechar tudo")
-        clear_btn.setToolTip("Fecha todos os arquivos e reinicia a sessão.")
-        clear_btn.clicked.connect(self.reset_requested)
-        buttons.addWidget(clear_btn)
+        deselect_btn = QPushButton("Desmarcar tudo")
+        deselect_btn.setToolTip("Desmarca todas as séries do gráfico "
+                                "(mantém os arquivos e as séries "
+                                "personalizadas).")
+        deselect_btn.clicked.connect(self._deselect_all)
+        buttons.addWidget(deselect_btn)
         layout.addLayout(buttons)
 
     # ------------------------------------------------------------- public
@@ -224,6 +225,18 @@ class SeriesPanel(QWidget):
                 item.setEnabled(item.data(_REF_ROLE) != x)
         finally:
             self._updating = was
+
+    def _deselect_all(self) -> None:
+        """Uncheck every series (remove them all from the plot) without
+        touching the loaded files or the custom series — they stay in the
+        tree, ready to be re-checked."""
+        self._updating = True
+        try:
+            for item in self._iter_series_items():
+                item.setCheckState(Qt.CheckState.Unchecked)
+        finally:
+            self._updating = False
+        self._emit_timer.start()
 
     def _emit_selection(self) -> None:
         self.selection_changed.emit(self.x_ref(), self.y_refs())
