@@ -67,5 +67,14 @@ class CursorMenu(QWidget):
         self._v_check.setChecked(vertical)
         self._h_check.setChecked(horizontal)
 
+    def reset(self) -> None:
+        """Restore the initial toggles (vertical cursor on, everything else
+        off) — used by the "Fechar tudo" full-session reset. setChecked only
+        emits when a value actually changes, so downstream handlers run just
+        for what was different."""
+        self.set_states(True, False)
+        self._interp_check.setChecked(True)
+        self._snap_check.setChecked(False)
+
     def _emit(self, _checked: bool) -> None:
         self.cursors_changed.emit(*self.states())

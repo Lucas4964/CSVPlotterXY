@@ -222,15 +222,62 @@ def test_legend_label_color_follows_theme(win, app):
     assert LIGHT.text.lower() not in legend_html()
 
 
-def test_remove_all_files_clears_plot(win, app):
-    for fid in file_ids(win):
-        win._project.remove_file(fid)
-    win._refresh_panel(x_fallback=None)
-    win._plot.clear()
+def test_reset_session_full(win, app):
+    from plotxy_app import __version__
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    win._panel.check_ref(SeriesRef("column", f1, "P1"))
     app.processEvents()
+    win._project.add_custom("soma", "P1 + P2")
+    win._refresh_panel()
+    win._panel.check_ref(SeriesRef("custom", "", "soma"))
+    app.processEvents()
+    win._plot.set_curve_color(SeriesRef("column", f1, "P1").key(), "#123456")
+    win._open_measures()
+    win._open_spectrum()
+    win._cursor_menu.set_states(True, True)   # horizontal cursor on
+    win._zoom_btn.setChecked(True)            # local zoom on
+    win._set_project_path("C:/algum/lugar/proj.plotxy")
+    app.processEvents()
+    assert win._measures.isVisible() and win._spectrum.isVisible()
+
+    win.reset_session()
+    app.processEvents()
+
+    assert win._project.files() == []
+    assert list(win._project.custom()) == []
+    assert win._plot._curves == {}
+    assert win._plot._color_override == {}
     assert win._panel.x_ref() is None
-    assert len(win._plot._curves) == 0
+    assert win.windowTitle() == f"CSVPlotterXY {__version__}"
+    assert win._project_path is None
+    assert not win._measures.isVisible()
+    assert not win._spectrum.isVisible()
+    assert win._cursor_menu.states() == (True, False)
+    assert win._zoom_btn.isChecked() is False
     assert not win._plot._cursor.isVisible()
+
+
+def test_reset_confirmation(win, app, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    f1 = file_ids(win)[0]
+    win._panel.set_x_ref(SeriesRef("column", f1, "time"))
+    app.processEvents()
+    # loaded session + "No" -> nothing happens
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.No)
+    win._on_reset_requested()
+    assert len(win._project.files()) == 2
+    # loaded session + "Yes" -> reset
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.StandardButton.Yes)
+    win._on_reset_requested()
+    assert win._project.files() == []
+    # empty session -> no dialog is shown at all
+    def _boom(*a, **k):
+        raise AssertionError("dialog shown on empty session")
+    monkeypatch.setattr(QMessageBox, "question", _boom)
+    win._on_reset_requested()   # must not raise
 
 
 # ------------------------------------------------------------ v0.3 features

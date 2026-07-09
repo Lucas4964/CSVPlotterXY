@@ -35,6 +35,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 760)
         self._settings = QSettings("CSVPlotterXY", "CSVPlotterXY")
         self._project = Project()
+        self._project_path: str | None = None
         self._theme = THEMES.get(
             str(self._settings.value("theme", "dark")), THEMES["dark"])
         self.setAcceptDrops(True)  # drop CSVs anywhere on the window
@@ -165,6 +166,7 @@ class MainWindow(QMainWindow):
         self._panel.new_series_requested.connect(self._on_new_series)
         self._panel.edit_series_requested.connect(self._on_edit_series)
         self._panel.delete_series_requested.connect(self._on_delete_series)
+        self._panel.reset_requested.connect(self._on_reset_requested)
         self._plot.v_cursor_moved.connect(self._v_readout.update_values)
         self._plot.h_cursor_moved.connect(self._h_readout.update_values)
         self._v_readout.color_change_requested.connect(self._plot.prompt_color)
@@ -289,13 +291,39 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------ project files
 
+    def _on_reset_requested(self) -> None:
+        """"Fechar tudo": full session reset, confirmed only when there is
+        something to lose."""
+        if self._project.files() or self._project.custom():
+            reply = QMessageBox.question(
+                self, "Fechar tudo",
+                "Descartar a sessão atual? Os arquivos, séries "
+                "personalizadas e cores serão perdidos.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        self.reset_session()
+        self.statusBar().showMessage("Sessão reiniciada.", 4000)
+
     def reset_session(self) -> None:
-        """Drop every loaded file, custom series and color override —
-        the blank state a project load starts from."""
+        """Return the app to its just-opened state: drop every file, custom
+        series and color override, close the Medidas/Espectro windows and
+        restore the cursor/zoom toggles. The theme is kept (it persists
+        across real restarts). Also the blank slate a project load starts
+        from — the confirmation lives in _on_reset_requested, not here."""
         self._project = Project()
+        self._project_path = None
+        self.setWindowTitle(f"CSVPlotterXY {__version__}")
         self._plot.clear()
         self._plot.clear_color_overrides()
         self._measures_cache_key = None
+        if self._measures is not None:
+            self._measures.close()
+        if self._spectrum is not None:
+            self._spectrum.close()
+        self._cursor_menu.reset()
+        self._zoom_btn.setChecked(False)  # -> _plot_zoom_toggled(False)
         self._refresh_panel()
 
     def load_project_file(self, path: str) -> None:
